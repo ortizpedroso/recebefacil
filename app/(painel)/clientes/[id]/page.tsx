@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { money, Status, Table, Title } from "@/components/ui";
+import { ClientForm } from "@/components/forms";
+import { Card, money, Status, Table, Title } from "@/components/ui";
 import { formatDateBR } from "@/lib/dates";
 import { clientFinance, displayStatus, loadBook } from "@/lib/read";
 import { requireSession } from "@/lib/session";
@@ -39,7 +40,29 @@ export default async function ClientePage({ params, searchParams }: { params: Pr
           <Link key={idTab} href={`/clientes/${id}?aba=${idTab}`} className={`rounded-full px-3 py-1 ${tab === idTab ? "bg-[#2563EB] text-white" : "border border-[#E2E8F0] bg-white"}`}>{label}</Link>
         ))}
       </div>
-      {tab === "dados" ? <p className="text-sm text-[#64748B]">{client.document} · {client.phone} · {client.whatsapp} · {client.email} · {client.street}, {client.number}, {client.district}, {client.city} {client.state}</p> : null}
+      {tab === "dados" ? (
+        <Card>
+          <ClientForm
+            clientId={client.id}
+            initial={{
+              kind: client.kind === "pj" ? "pj" : "pf",
+              name: client.name,
+              document: client.document,
+              email: client.email,
+              phone: client.phone,
+              whatsapp: client.whatsapp,
+              zip: client.zip,
+              state: client.state,
+              city: client.city,
+              district: client.district,
+              street: client.street,
+              number: client.number,
+              complement: client.complement,
+              notes: client.notes,
+            }}
+          />
+        </Card>
+      ) : null}
       {tab === "resumo" ? (
         <div className="grid gap-3 sm:grid-cols-3">
           <p className="rounded-xl border border-[#E2E8F0] bg-white p-4">Comprado {money(finance.bought)}</p>

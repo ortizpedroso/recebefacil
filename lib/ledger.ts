@@ -333,3 +333,67 @@ export async function changeDueDate(db: DB, organizationId: string, installmentI
 export async function setRecurrenceStatus(db: DB, organizationId: string, recurrenceId: string, status: "ativa" | "suspensa" | "cancelada") {
   await db.update(recurrences).set({ status }).where(and(eq(recurrences.organizationId, organizationId), eq(recurrences.id, recurrenceId)));
 }
+
+export async function setContractStatus(db: DB, organizationId: string, contractId: string, status: "ativo" | "suspenso" | "encerrado") {
+  const [contract] = await db.select().from(contracts).where(and(eq(contracts.organizationId, organizationId), eq(contracts.id, contractId)));
+  if (!contract) throw new DomainError("Contrato não encontrado.");
+  await db.update(contracts).set({ status }).where(eq(contracts.id, contractId));
+}
+
+export async function cancelSale(db: DB, organizationId: string, saleId: string) {
+  const [sale] = await db.select().from(sales).where(and(eq(sales.organizationId, organizationId), eq(sales.id, saleId)));
+  if (!sale) throw new DomainError("Venda não encontrada.");
+  if (sale.status === "cancelada") return;
+  const rows = await db.select().from(charges).where(and(eq(charges.organizationId, organizationId), eq(charges.saleId, saleId)));
+  if (rows.some((row) => row.paidCents > 0 && row.status !== "estornada")) {
+    throw new DomainError("Estorne os recebimentos antes de cancelar a venda.");
+  }
+  await db.transaction(async (tx) => {
+    await tx.update(sales).set({ status: "cancelada" }).where(eq(sales.id, saleId));
+    await tx.update(installments).set({ status: "cancelada" }).where(and(eq(installments.organizationId, organizationId), eq(installments.saleId, saleId)));
+    await tx.update(charges).set({ status: "cancelada" }).where(and(eq(charges.organizationId, organizationId), eq(charges.saleId, saleId)));
+    await tx.update(contracts).set({ status: "encerrado" }).where(and(eq(contracts.organizationId, organizationId), eq(contracts.saleId, saleId)));
+  });
+}
+
+export async function advanceRecurrences(db: DB, organizationId: string, today: string) {
+  const rows = await db.select().from(recurrences).where(and(eq(recurrences.organizationId, organizationId), eq(recurrences.status, "ativa")));
+  for (const recurrence of rows) {
+    let next = recurrence.nextOn;
+    let guard = 0;
+    while (next <= today && guard < 24) {
+      if (recurrence.endsOn && next > recurrence.endsOn) break;
+      const [existing] = await db
+        .select()
+        .from(charges)
+        .where(and(eq(charges.organizationId, organizationId), eq(charges.recurrenceId, recurrence.id), eq(charges.dueOn, next)));
+      if (!existing) {
+        const [sample] = await db
+          .select()
+          .from(charges)
+          .where(and(eq(charges.organizationId, organizationId), eq(charges.recurrenceId, recurrence.id)));
+        await db.insert(charges).values({
+          id: id(),
+          organizationId,
+          code: await nextCode(db, organizationId, "COB", "charges"),
+          clientId: recurrence.clientId,
+          saleId: sample?.saleId ?? null,
+          contractId: sample?.contractId ?? null,
+          installmentId: null,
+          recurrenceId: recurrence.id,
+          amountCents: recurrence.amountCents,
+          paidCents: 0,
+          dueOn: next,
+          method: sample?.method ?? "Pix",
+          status: "pendente",
+          paidOn: null,
+        });
+      }
+      next = addPeriod(next, recurrence.periodicity as Periodicity, 1);
+      guard += 1;
+    }
+    if (next !== recurrence.nextOn) {
+      await db.update(recurrences).set({ nextOn: next }).where(eq(recurrences.id, recurrence.id));
+    }
+  }
+}

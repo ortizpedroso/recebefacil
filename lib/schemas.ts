@@ -9,7 +9,7 @@ export const clientSchema = z.object({
   kind: z.enum(["pf", "pj"]),
   name: z.string().trim().min(2).max(160),
   document: z.string().trim().min(11).max(18),
-  email: z.string().trim().email().or(z.literal("")),
+  email: z.string().trim().max(160).refine((value) => value === "" || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value), "Informe um e-mail."),
   phone: z.string().trim().min(8).max(20),
   whatsapp: z.string().trim().max(20),
   zip: z.string().trim().max(12),

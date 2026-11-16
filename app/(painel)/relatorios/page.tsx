@@ -43,7 +43,7 @@ export default async function RelatoriosPage({ searchParams }: { searchParams: P
         <button className="rounded-lg border border-[#E2E8F0] bg-white px-4 py-2 text-sm">Filtrar</button>
       </form>
       <div className="flex gap-3 text-sm">
-        <a className="rounded-lg bg-[#2563EB] px-4 py-2 text-white" href={`/api/relatorios${suffix ? `?${suffix}` : ""}`}>Baixar CSV</a>
+        <a className="rounded-lg bg-teal-700 px-4 py-2 text-white" href={`/api/relatorios${suffix ? `?${suffix}` : ""}`}>Baixar CSV</a>
         <a className="rounded-lg border border-[#E2E8F0] bg-white px-4 py-2" href={`/api/relatorios?formato=pdf${suffix ? `&${suffix}` : ""}`}>Baixar PDF</a>
       </div>
       <div className="grid gap-3 sm:grid-cols-3">

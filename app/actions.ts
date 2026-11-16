@@ -2,12 +2,12 @@
 
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { DomainError, changeDueDate, createSale, registerPayment, reverseCharge, setRecurrenceStatus } from "../lib/ledger";
+import { DomainError, advanceRecurrences, cancelSale, changeDueDate, createSale, registerPayment, reverseCharge, setContractStatus, setRecurrenceStatus } from "../lib/ledger";
 import { cents, parseReais } from "../lib/money";
 import { requireSession } from "../lib/session";
 import { catalogSchema, clientSchema, contactSchema, dueSchema, paymentSchema, saleSchema } from "../lib/schemas";
 import { catalogItems, clients, contacts, integrationEvents, organizations } from "../lib/schema";
-import { insertCatalog, insertClient, resetOrganization } from "../lib/tenant";
+import { insertCatalog, insertClient, resetOrganization, updateCatalog, updateClient } from "../lib/tenant";
 
 function fail(error: unknown) {
   if (error instanceof DomainError) return { ok: false as const, error: error.message };
@@ -25,6 +25,23 @@ export async function createClientAction(raw: unknown) {
   return { ok: true as const };
 }
 
+export async function updateClientAction(raw: unknown) {
+  const parsed = clientSchema.safeParse(raw);
+  const id = typeof raw === "object" && raw && "id" in raw ? String(raw.id) : "";
+  if (!parsed.success || !id) return { ok: false as const, error: "Revise os dados do cliente." };
+  const digits = parsed.data.document.replace(/\D/g, "");
+  if (digits.length !== 11 && digits.length !== 14) return { ok: false as const, error: "Informe um CPF ou CNPJ." };
+  try {
+    const { db, org } = await requireSession();
+    await updateClient(db, org.id, id, { ...parsed.data, whatsapp: parsed.data.whatsapp || parsed.data.phone });
+    revalidatePath("/clientes");
+    revalidatePath(`/clientes/${id}`);
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
 export async function createCatalogAction(raw: unknown) {
   const parsed = catalogSchema.safeParse(raw);
   if (!parsed.success) return { ok: false as const, error: "Revise o item do catálogo." };
@@ -32,6 +49,20 @@ export async function createCatalogAction(raw: unknown) {
     const priceCents = parseReais(parsed.data.price);
     const { db, org } = await requireSession();
     await insertCatalog(db, org.id, { ...parsed.data, priceCents, sku: parsed.data.sku || "" });
+    revalidatePath("/produtos");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function updateCatalogAction(id: string, raw: unknown) {
+  const parsed = catalogSchema.safeParse(raw);
+  if (!parsed.success) return { ok: false as const, error: "Revise o item do catálogo." };
+  try {
+    const priceCents = parseReais(parsed.data.price);
+    const { db, org } = await requireSession();
+    await updateCatalog(db, org.id, id, { ...parsed.data, priceCents, sku: parsed.data.sku || "" });
     revalidatePath("/produtos");
     return { ok: true as const };
   } catch (error) {
@@ -110,6 +141,29 @@ export async function dueAction(raw: unknown) {
     const { db, org } = await requireSession();
     await changeDueDate(db, org.id, parsed.data.installmentId, parsed.data.dueOn);
     revalidatePath("/parcelas");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function cancelSaleAction(saleId: string) {
+  try {
+    const { db, org } = await requireSession();
+    await cancelSale(db, org.id, saleId);
+    revalidatePath("/vendas");
+    revalidatePath("/");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function contractAction(id: string, status: "ativo" | "suspenso" | "encerrado") {
+  try {
+    const { db, org } = await requireSession();
+    await setContractStatus(db, org.id, id, status);
+    revalidatePath("/contratos");
     return { ok: true as const };
   } catch (error) {
     return fail(error);

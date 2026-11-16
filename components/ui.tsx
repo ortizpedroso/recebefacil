@@ -46,8 +46,8 @@ export function Field({ label, children }: { label: string; children: React.Reac
   );
 }
 
-export const inputClass = "w-full rounded-lg border border-[#E2E8F0] bg-white px-3 py-2 text-sm outline-none focus:border-[#2563EB]";
-export const buttonClass = "rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60";
+export const inputClass = "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-700";
+export const buttonClass = "rounded-lg bg-teal-700 px-4 py-2 text-sm font-medium text-white hover:bg-teal-800 disabled:opacity-60";
 
 export function Empty({ children }: { children: React.ReactNode }) {
   return <p className="rounded-xl border border-dashed border-[#E2E8F0] bg-white p-8 text-center text-sm text-[#64748B]">{children}</p>;

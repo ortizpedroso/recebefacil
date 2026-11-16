@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import type { DB } from "./db";
 import { cents, type Cents } from "./money";
-import { createSale, registerPayment, type SaleInput } from "./ledger";
+import { createSale, DomainError, registerPayment, type SaleInput } from "./ledger";
 import {
   catalogItems,
   charges,
@@ -51,6 +51,32 @@ export async function insertClient(
   return id;
 }
 
+export async function updateClient(
+  db: DB,
+  organizationId: string,
+  clientId: string,
+  input: {
+    kind: "pf" | "pj";
+    name: string;
+    document: string;
+    email: string;
+    phone: string;
+    whatsapp: string;
+    zip: string;
+    state: string;
+    city: string;
+    district: string;
+    street: string;
+    number: string;
+    complement: string;
+    notes: string;
+  },
+) {
+  const [row] = await db.select().from(clients).where(and(eq(clients.organizationId, organizationId), eq(clients.id, clientId)));
+  if (!row) throw new DomainError("Cliente não encontrado.");
+  await db.update(clients).set(input).where(eq(clients.id, clientId));
+}
+
 export async function insertCatalog(
   db: DB,
   organizationId: string,
@@ -67,6 +93,25 @@ export async function insertCatalog(
   const id = randomUUID();
   await db.insert(catalogItems).values({ id, organizationId, ...input, active: true });
   return id;
+}
+
+export async function updateCatalog(
+  db: DB,
+  organizationId: string,
+  itemId: string,
+  input: {
+    kind: "produto" | "servico";
+    name: string;
+    description: string;
+    category: string;
+    sku: string;
+    priceCents: Cents;
+    billing: "pontual" | "recorrente";
+  },
+) {
+  const [row] = await db.select().from(catalogItems).where(and(eq(catalogItems.organizationId, organizationId), eq(catalogItems.id, itemId)));
+  if (!row) throw new DomainError("Item não encontrado.");
+  await db.update(catalogItems).set(input).where(eq(catalogItems.id, itemId));
 }
 
 async function sale(db: DB, organizationId: string, input: SaleInput) {

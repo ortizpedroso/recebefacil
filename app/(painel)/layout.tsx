@@ -1,11 +1,13 @@
 import { Shell, type ShellAlert, type ShellSearch } from "@/components/shell";
-import { formatDateBR } from "@/lib/dates";
+import { formatDateBR, todayIn } from "@/lib/dates";
 import { money } from "@/components/ui";
+import { advanceRecurrences } from "@/lib/ledger";
 import { clientName, displayStatus, loadBook } from "@/lib/read";
 import { requireSession } from "@/lib/session";
 
 export default async function PainelLayout({ children }: { children: React.ReactNode }) {
   const session = await requireSession();
+  await advanceRecurrences(session.db, session.org.id, todayIn(session.org.timezone));
   const book = await loadBook(session.db, session.org.id, session.org.timezone);
   const search: ShellSearch[] = [
     ...book.clients.map((client) => ({

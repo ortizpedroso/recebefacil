@@ -5,21 +5,45 @@ import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { clientSchema, catalogSchema } from "@/lib/schemas";
-import { createCatalogAction, createClientAction, payAction } from "@/app/actions";
+import { createCatalogAction, createClientAction, payAction, updateCatalogAction, updateClientAction } from "@/app/actions";
 import { buttonClass, Field, inputClass } from "./ui";
 
-export function ClientForm() {
+export function ClientForm({
+  clientId,
+  initial,
+}: {
+  clientId?: string;
+  initial?: {
+    kind: "pf" | "pj";
+    name: string;
+    document: string;
+    email: string;
+    phone: string;
+    whatsapp: string;
+    zip: string;
+    state: string;
+    city: string;
+    district: string;
+    street: string;
+    number: string;
+    complement: string;
+    notes: string;
+  };
+}) {
   const router = useRouter();
   const [message, setMessage] = useState("");
-  const form = useForm({ resolver: zodResolver(clientSchema), defaultValues: { kind: "pf" as const, name: "", document: "", email: "", phone: "", whatsapp: "", zip: "", state: "", city: "", district: "", street: "", number: "", complement: "", notes: "" } });
+  const form = useForm({
+    resolver: zodResolver(clientSchema),
+    defaultValues: initial ?? { kind: "pf" as const, name: "", document: "", email: "", phone: "", whatsapp: "", zip: "", state: "", city: "", district: "", street: "", number: "", complement: "", notes: "" },
+  });
   return (
     <form
       className="grid gap-3 md:grid-cols-2"
       onSubmit={form.handleSubmit(async (values) => {
-        const result = await createClientAction(values);
-        setMessage(result.ok ? "Cliente cadastrado." : result.error);
+        const result = clientId ? await updateClientAction({ ...values, id: clientId }) : await createClientAction(values);
+        setMessage(result.ok ? (clientId ? "Cliente atualizado." : "Cliente cadastrado.") : result.error);
         if (result.ok) {
-          form.reset();
+          if (!clientId) form.reset();
           router.refresh();
         }
       })}
@@ -42,25 +66,36 @@ export function ClientForm() {
       <Field label="Rua"><input className={inputClass} {...form.register("street")} /></Field>
       <Field label="Número"><input className={inputClass} {...form.register("number")} /></Field>
       <div className="md:col-span-2 flex items-center gap-3">
-        <button className={buttonClass} type="submit">Cadastrar cliente</button>
+        <button className={buttonClass} type="submit">{clientId ? "Salvar cliente" : "Cadastrar cliente"}</button>
         {message ? <span className="text-sm text-[#64748B]">{message}</span> : null}
+        {form.formState.errors.email?.message ? <span className="text-sm text-[#EF4444]">{form.formState.errors.email.message}</span> : null}
+        {form.formState.errors.document?.message ? <span className="text-sm text-[#EF4444]">{form.formState.errors.document.message}</span> : null}
       </div>
     </form>
   );
 }
 
-export function CatalogForm() {
+export function CatalogForm({
+  itemId,
+  initial,
+}: {
+  itemId?: string;
+  initial?: { kind: "produto" | "servico"; name: string; description: string; category: string; sku: string; price: string; billing: "pontual" | "recorrente" };
+}) {
   const router = useRouter();
   const [message, setMessage] = useState("");
-  const form = useForm({ resolver: zodResolver(catalogSchema), defaultValues: { kind: "produto" as const, name: "", description: "", category: "", sku: "", price: "", billing: "pontual" as const } });
+  const form = useForm({
+    resolver: zodResolver(catalogSchema),
+    defaultValues: initial ?? { kind: "produto" as const, name: "", description: "", category: "", sku: "", price: "", billing: "pontual" as const },
+  });
   return (
     <form
       className="grid gap-3 md:grid-cols-2"
       onSubmit={form.handleSubmit(async (values) => {
-        const result = await createCatalogAction(values);
-        setMessage(result.ok ? "Item cadastrado." : result.error);
+        const result = itemId ? await updateCatalogAction(itemId, values) : await createCatalogAction(values);
+        setMessage(result.ok ? (itemId ? "Item atualizado." : "Item cadastrado.") : result.error);
         if (result.ok) {
-          form.reset();
+          if (!itemId) form.reset();
           router.refresh();
         }
       })}
@@ -85,7 +120,7 @@ export function CatalogForm() {
         <Field label="Descrição"><input className={inputClass} {...form.register("description")} /></Field>
       </div>
       <div className="md:col-span-2 flex items-center gap-3">
-        <button className={buttonClass} type="submit">Salvar item</button>
+        <button className={buttonClass} type="submit">{itemId ? "Atualizar item" : "Salvar item"}</button>
         {message ? <span className="text-sm text-[#64748B]">{message}</span> : null}
       </div>
     </form>
