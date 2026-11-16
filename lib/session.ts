@@ -53,9 +53,9 @@ async function companySession(db: DB, org: typeof organizations.$inferSelect, em
 }
 
 export async function requireSession(): Promise<Session> {
-  const db = await getDb();
   const jar = await cookies();
   const token = jar.get("recebe_session")?.value;
+  const db = await getDb();
   if (token) {
     const [auth] = await db.select().from(authSessions).where(eq(authSessions.tokenHash, tokenHash(token)));
     if (auth && auth.expiresAt > new Date().toISOString()) {

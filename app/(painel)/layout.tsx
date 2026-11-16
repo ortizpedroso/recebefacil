@@ -7,6 +7,8 @@ import { clientName, displayStatus, loadBook } from "@/lib/read";
 import { errorEvents } from "@/lib/schema";
 import { requireSession } from "@/lib/session";
 
+export const dynamic = "force-dynamic";
+
 export default async function PainelLayout({ children }: { children: React.ReactNode }) {
   const session = await requireSession();
   await advanceRecurrences(session.db, session.org.id, todayIn(session.org.timezone));
