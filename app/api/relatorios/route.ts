@@ -25,7 +25,7 @@ export async function GET(request: Request) {
     lines.push(`${sale.code} ${formatDateBR(sale.soldOn)} ${clientName(book, sale.clientId)} ${formatBRL(cents(sale.totalCents))} ${sale.status}`);
   }
   if (format === "pdf") {
-    return new NextResponse(pdfDocument(lines.slice(0, 40)), {
+    return new NextResponse(pdfDocument(lines), {
       headers: { "content-type": "application/pdf", "content-disposition": "attachment; filename=relatorio.pdf" },
     });
   }

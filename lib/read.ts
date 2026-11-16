@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { asc, count, eq } from "drizzle-orm";
 import { daysLate, delayBand, shiftDays, todayIn } from "./dates";
 import type { DB } from "./db";
 import {
@@ -55,6 +55,31 @@ export async function loadBook(db: DB, organizationId: string, timeZone: string)
 }
 
 export type Book = Awaited<ReturnType<typeof loadBook>>;
+
+export const PAGE_SIZE = 8;
+
+export async function pagedRows<T>(total: number, page: number, load: (offset: number) => Promise<T[]>) {
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const current = Math.min(Math.max(page, 1), pages);
+  const rows = await load((current - 1) * PAGE_SIZE);
+  return { rows, page: current, pages, total };
+}
+
+export async function pagedInstallments(db: DB, organizationId: string, page: number) {
+  const where = eq(installments.organizationId, organizationId);
+  const [totals] = await db.select({ total: count() }).from(installments).where(where);
+  return pagedRows(Number(totals?.total ?? 0), page, (offset) =>
+    db.select().from(installments).where(where).orderBy(asc(installments.dueOn)).limit(PAGE_SIZE).offset(offset),
+  );
+}
+
+export async function pagedCharges(db: DB, organizationId: string, page: number) {
+  const where = eq(charges.organizationId, organizationId);
+  const [totals] = await db.select({ total: count() }).from(charges).where(where);
+  return pagedRows(Number(totals?.total ?? 0), page, (offset) =>
+    db.select().from(charges).where(where).orderBy(asc(charges.dueOn)).limit(PAGE_SIZE).offset(offset),
+  );
+}
 
 export function displayStatus(status: string, dueOn: string, today: string, paid: number, amount: number) {
   if (status === "paga" || status === "cancelada" || status === "estornada") return status;

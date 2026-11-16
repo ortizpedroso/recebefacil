@@ -9,8 +9,10 @@ import {
   Bell,
   CalendarClock,
   ChevronDown,
+  CreditCard,
   FileText,
   HelpCircle,
+  MessageSquare,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -39,16 +41,19 @@ const mainNav = [
   { href: "/cobrancas", label: "Cobranças e recebimentos", icon: Receipt },
   { href: "/inadimplencia", label: "Inadimplência", icon: AlertTriangle },
   { href: "/relatorios", label: "Relatórios", icon: BarChart3 },
+  { href: "/fiscal", label: "Notas fiscais", icon: FileText },
+  { href: "/mensagens", label: "Mensagens", icon: MessageSquare },
 ];
 
 const footerNav = [
   { href: "/integracoes", label: "Integrações", icon: Plug },
+  { href: "/assinatura", label: "Assinatura", icon: CreditCard },
   { href: "/configuracoes", label: "Configurações", icon: Settings },
   { href: "/ajuda", label: "Ajuda e suporte", icon: HelpCircle },
 ];
 
 export type ShellSearch = { kind: string; title: string; subtitle: string; href: string; haystack: string };
-export type ShellAlert = { id: string; tone: "late" | "soon"; label: string; amount: string; detail: string; href: string };
+export type ShellAlert = { id: string; tone: "late" | "soon" | "erro"; label: string; amount: string; detail: string; href: string };
 
 export function Shell({
   company,
@@ -215,9 +220,9 @@ export function Shell({
                   </div>
                   <div className="max-h-80 divide-y divide-slate-100 overflow-y-auto">
                     {alerts.map((alert) => (
-                      <Link key={alert.id} href={alert.href} onClick={() => setNotifOpen(false)} className={`block px-4 py-3 ${alert.tone === "late" ? "hover:bg-rose-50/40" : "hover:bg-slate-50"}`}>
+                      <Link key={alert.id} href={alert.href} onClick={() => setNotifOpen(false)} className={`block px-4 py-3 ${alert.tone === "soon" ? "hover:bg-slate-50" : "hover:bg-rose-50/40"}`}>
                         <span className="flex items-center justify-between gap-2">
-                          <span className={`text-xs font-semibold ${alert.tone === "late" ? "text-rose-700" : "text-amber-700"}`}>{alert.label}</span>
+                          <span className={`text-xs font-semibold ${alert.tone === "soon" ? "text-amber-700" : "text-rose-700"}`}>{alert.label}</span>
                           <span className="text-xs font-semibold text-slate-900">{alert.amount}</span>
                         </span>
                         <span className="mt-0.5 block truncate text-xs text-slate-600">{alert.detail}</span>

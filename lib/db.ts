@@ -39,7 +39,7 @@ async function openDatabase(): Promise<DB> {
     });
     return db;
   }
-  const dir = join(process.cwd(), "data", "recebefacil");
+  const dir = process.env.RECEBEFACIL_DATA || "/tmp/recebefacil-data";
   return openIsolatedDatabase(dir);
 }
 
