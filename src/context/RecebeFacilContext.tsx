@@ -138,18 +138,42 @@ interface RecebeFacilContextValue {
 }
 
 const RecebeFacilContext = createContext<RecebeFacilContextValue | null>(null);
+const STORAGE_KEY = 'recebefacil_saas_demo_v1';
+
+function readLocalBook(): RecebeFacilState {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) return JSON.parse(saved) as RecebeFacilState;
+  } catch {
+    return INITIAL_RECEBEFACIL_STATE;
+  }
+  return INITIAL_RECEBEFACIL_STATE;
+}
+
+function writeLocalBook(document: RecebeFacilState) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(document));
+  } catch {
+    return;
+  }
+}
 
 export const RecebeFacilProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<RecebeFacilState>(INITIAL_RECEBEFACIL_STATE);
   const [hydrated, setHydrated] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const revisionRef = useRef(0);
   const echoRef = useRef(true);
   const savingRef = useRef(false);
   const pendingRef = useRef<RecebeFacilState | null>(null);
 
+  const remoteRef = useRef(false);
+
   const persist = async (document: RecebeFacilState) => {
+    if (!remoteRef.current) {
+      writeLocalBook(document);
+      return;
+    }
     if (savingRef.current) {
       pendingRef.current = document;
       return;
@@ -172,7 +196,10 @@ export const RecebeFacilProvider: React.FC<{ children: React.ReactNode }> = ({ c
         showToast('O livro foi atualizado em outro lugar. Recarreguei os dados.', 'info');
         return;
       }
-      if (!response.ok) return;
+      if (!response.ok) {
+        showToast('Não consegui gravar a demonstração no servidor.', 'error');
+        return;
+      }
       const body = (await response.json()) as { revision: number };
       revisionRef.current = body.revision;
     } finally {
@@ -203,18 +230,26 @@ export const RecebeFacilProvider: React.FC<{ children: React.ReactNode }> = ({ c
     void (async () => {
       try {
         const response = await fetch('/api/book');
-        if (!response.ok) {
-          if (!cancel) setLoadError('Não foi possível abrir o livro.');
+        if (cancel) return;
+        if (response.ok) {
+          const body = (await response.json()) as { revision: number; document: RecebeFacilState };
+          remoteRef.current = true;
+          revisionRef.current = body.revision;
+          echoRef.current = true;
+          setState(body.document);
+          setHydrated(true);
           return;
         }
-        const body = (await response.json()) as { revision: number; document: RecebeFacilState };
-        if (cancel) return;
-        revisionRef.current = body.revision;
+        remoteRef.current = false;
         echoRef.current = true;
-        setState(body.document);
+        setState(readLocalBook());
         setHydrated(true);
       } catch {
-        if (!cancel) setLoadError('Não foi possível abrir o livro.');
+        if (cancel) return;
+        remoteRef.current = false;
+        echoRef.current = true;
+        setState(readLocalBook());
+        setHydrated(true);
       }
     })();
     return () => {
@@ -1129,13 +1164,7 @@ export const RecebeFacilProvider: React.FC<{ children: React.ReactNode }> = ({ c
         updateConfiguracoes,
       }}
     >
-      {loadError ? (
-        <p className="p-8 text-sm text-rose-700">{loadError}</p>
-      ) : hydrated ? (
-        children
-      ) : (
-        <p className="p-8 text-sm text-slate-600">Carregando o livro...</p>
-      )}
+      {hydrated ? children : <p className="p-8 text-sm text-slate-600">Carregando a demonstração...</p>}
     </RecebeFacilContext.Provider>
   );
 };

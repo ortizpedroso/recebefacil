@@ -24,7 +24,7 @@ const FAQS = [
   },
   {
     q: 'Os dados alterados nesta demonstração ficam salvos?',
-    a: 'Sim. O livro fica no banco de dados, separado por pessoa autenticada. O Asaas continua sendo uma simulação, sem cobrança real. Para voltar ao cenário original, clique em "Resetar" no rodapé do menu lateral.',
+    a: 'Sim. As alterações ficam salvas para você continuar a apresentação. Nenhuma cobrança, Pix, boleto ou cartão é real, e o Asaas é só uma simulação visual. Para voltar ao cenário original, clique em "Resetar" no rodapé do menu lateral.',
   },
   {
     q: 'O envio para WhatsApp e a integração com o Asaas executam ações reais?',
