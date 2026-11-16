@@ -3,7 +3,22 @@ import { and, eq, sql } from "drizzle-orm";
 import type { DB } from "./db";
 import { cents, type Cents } from "./money";
 import { createSale, registerPayment, type SaleInput } from "./ledger";
-import { catalogItems, clients, integrationEvents, members, organizations } from "./schema";
+import {
+  catalogItems,
+  charges,
+  clients,
+  contacts,
+  contracts,
+  dueChanges,
+  installments,
+  integrationEvents,
+  members,
+  organizations,
+  payments,
+  recurrences,
+  saleItems,
+  sales,
+} from "./schema";
 
 export async function insertClient(
   db: DB,
@@ -239,12 +254,19 @@ export async function ensureOrganization(db: DB, viewerKey: string, userName: st
     const scoped = tx as unknown as DB;
     await scoped.execute(sql`select pg_advisory_xact_lock(hashtext(${viewerKey}))`);
     const [existing] = await scoped.select().from(organizations).where(eq(organizations.viewerKey, viewerKey));
-    if (existing) return existing;
+    if (existing) {
+      if (existing.tradeName === "Horizonte Comércio") {
+        const tradeName = "Horizonte Comércio & Serviços";
+        await scoped.update(organizations).set({ tradeName }).where(eq(organizations.id, existing.id));
+        return { ...existing, tradeName };
+      }
+      return existing;
+    }
     const id = randomUUID();
     await scoped.insert(organizations).values({
       id,
       viewerKey,
-      tradeName: "Horizonte Comércio",
+      tradeName: "Horizonte Comércio & Serviços",
       legalName: "Horizonte Comércio Demonstração Ltda",
       document: "34.567.890/0001-12",
       email: "contato@exemplo.com",
@@ -268,5 +290,24 @@ export async function ensureOrganization(db: DB, viewerKey: string, userName: st
     const [created] = await scoped.select().from(organizations).where(eq(organizations.id, id));
     if (!created) throw new Error("Organização indisponível.");
     return created;
+  });
+}
+
+export async function resetOrganization(db: DB, organizationId: string, userName: string) {
+  await db.transaction(async (tx) => {
+    const scoped = tx as unknown as DB;
+    const rows = [payments, contacts, dueChanges, charges, installments, recurrences, saleItems, contracts, sales, catalogItems, clients, members, integrationEvents];
+    for (const table of rows) {
+      await scoped.delete(table).where(eq(table.organizationId, organizationId));
+    }
+    await seedOrganization(scoped, organizationId);
+    await scoped.insert(members).values({
+      id: randomUUID(),
+      organizationId,
+      name: userName,
+      email: "voce@exemplo.com",
+      role: "administrador",
+      active: true,
+    });
   });
 }

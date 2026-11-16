@@ -1,31 +1,25 @@
-import { asaasAction } from "@/app/actions";
-import { buttonClass, Card, Title } from "@/components/ui";
+import { IntegrationsPanel } from "@/components/integrations-panel";
+import { formatDateTimeBR } from "@/lib/dates";
 import { loadBook } from "@/lib/read";
 import { requireSession } from "@/lib/session";
 
 export default async function IntegracoesPage() {
   const session = await requireSession();
   const book = await loadBook(session.db, session.org.id, session.org.timezone);
-  const connected = session.org.asaasConnected;
+  const events = [...book.events].sort((a, b) => b.happenedAt.localeCompare(a.happenedAt));
   return (
-    <div className="space-y-4">
-      <Title hint="Nenhuma chave é pedida. Conectar só muda o estado visual.">Integrações</Title>
-      <Card>
-        <p className="text-lg font-semibold">Asaas</p>
-        <p className="mt-1 text-sm text-[#64748B]">Provedor previsto para Pix, boleto e cartão. Esta versão não envia cobrança.</p>
-        <p className="mt-3 text-sm">Situação: {connected ? "conectado na simulação" : "não conectado"}</p>
-        <p className="text-sm">Ambiente: {session.org.asaasEnvironment}</p>
-        <p className="text-sm">Última sincronização: {session.org.asaasSyncedAt ?? "nunca"}</p>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <form action={async () => { "use server"; await asaasAction("demonstracao", true); }}><button className={buttonClass}>Conectar demonstração</button></form>
-          <form action={async () => { "use server"; await asaasAction("sandbox", true); }}><button className="rounded-lg border border-[#E2E8F0] px-4 py-2 text-sm">Marcar sandbox</button></form>
-          <form action={async () => { "use server"; await asaasAction("demonstracao", false); }}><button className="rounded-lg border border-[#E2E8F0] px-4 py-2 text-sm">Desconectar</button></form>
-        </div>
-      </Card>
-      <Card>
-        <p className="mb-2 font-medium">Histórico simulado</p>
-        {book.events.map((event) => <p key={event.id} className="text-sm text-[#64748B]">{event.happenedAt.slice(0, 16)} · {event.description}</p>)}
-      </Card>
-    </div>
+    <IntegrationsPanel
+      connected={session.org.asaasConnected}
+      environment={session.org.asaasEnvironment}
+      account={session.org.tradeName}
+      syncedAt={formatDateTimeBR(session.org.asaasSyncedAt)}
+      events={events.map((event) => ({
+        id: event.id,
+        happenedAt: formatDateTimeBR(event.happenedAt),
+        kind: event.kind,
+        status: event.status,
+        description: event.description,
+      }))}
+    />
   );
 }

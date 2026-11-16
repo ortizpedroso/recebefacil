@@ -9,7 +9,23 @@ export type Session = {
   org: typeof organizations.$inferSelect;
   userName: string;
   publicDemo: boolean;
+  profileName: string;
+  profileRole: string;
+  profileEmail: string;
+  showAvatar: boolean;
 };
+
+function profileFor(name: string, demo: boolean) {
+  if (!demo) {
+    return { profileName: name, profileRole: "Conta", profileEmail: "", showAvatar: false };
+  }
+  return {
+    profileName: "Camila Mendes",
+    profileRole: "Gestora Comercial e Financeira",
+    profileEmail: "camila@exemplo.com",
+    showAvatar: true,
+  };
+}
 
 export async function requireSession(): Promise<Session> {
   const headerList = await headers();
@@ -18,9 +34,10 @@ export async function requireSession(): Promise<Session> {
   if (!identity.verified) {
     const org = await ensureOrganization(db, "public:demonstracao", "Visitante");
     if (!org) throw new Error("Organização indisponível.");
-    return { db, org, userName: "Visitante", publicDemo: true };
+    return { db, org, userName: "Visitante", publicDemo: true, ...profileFor("Visitante", true) };
   }
   const org = await ensureOrganization(db, `${identity.stage}:${identity.sub}`, identity.name || identity.email || "Conta");
   if (!org) throw new Error("Organização indisponível.");
-  return { db, org, userName: identity.name || identity.email || "Conta", publicDemo: false };
+  const userName = identity.name || identity.email || "Conta";
+  return { db, org, userName, publicDemo: false, ...profileFor(userName, identity.simulated) };
 }

@@ -1,15 +1,68 @@
-import { Shell } from "@/components/shell";
-import { loadBook, overdueCount } from "@/lib/read";
+import { Shell, type ShellAlert, type ShellSearch } from "@/components/shell";
+import { formatDateBR } from "@/lib/dates";
+import { money } from "@/components/ui";
+import { clientName, displayStatus, loadBook } from "@/lib/read";
 import { requireSession } from "@/lib/session";
 
 export default async function PainelLayout({ children }: { children: React.ReactNode }) {
   const session = await requireSession();
   const book = await loadBook(session.db, session.org.id, session.org.timezone);
+  const search: ShellSearch[] = [
+    ...book.clients.map((client) => ({
+      kind: "Cliente",
+      title: client.name,
+      subtitle: client.document,
+      href: `/clientes/${client.id}`,
+      haystack: `${client.name} ${client.document}`.toLowerCase(),
+    })),
+    ...book.sales.map((sale) => ({
+      kind: "Venda",
+      title: sale.code,
+      subtitle: `${clientName(book, sale.clientId)} · ${money(sale.totalCents)}`,
+      href: "/vendas",
+      haystack: `${sale.code} ${clientName(book, sale.clientId)}`.toLowerCase(),
+    })),
+    ...book.charges.map((charge) => ({
+      kind: "Cobrança",
+      title: charge.code,
+      subtitle: `${clientName(book, charge.clientId)} · ${money(charge.amountCents)}`,
+      href: "/cobrancas",
+      haystack: `${charge.code} ${clientName(book, charge.clientId)}`.toLowerCase(),
+    })),
+  ];
+  const late = book.charges.filter((charge) => displayStatus(charge.status, charge.dueOn, book.today, charge.paidCents, charge.amountCents) === "vencida");
+  const soon = book.charges
+    .filter((charge) => displayStatus(charge.status, charge.dueOn, book.today, charge.paidCents, charge.amountCents) === "pendente")
+    .slice(0, 3);
+  const alerts: ShellAlert[] = [
+    ...late.map((charge) => ({
+      id: charge.id,
+      tone: "late" as const,
+      label: "Cobrança vencida",
+      amount: money(charge.amountCents - charge.paidCents),
+      detail: `${clientName(book, charge.clientId)} · Venc. ${formatDateBR(charge.dueOn)}`,
+      href: "/inadimplencia",
+    })),
+    ...soon.map((charge) => ({
+      id: charge.id,
+      tone: "soon" as const,
+      label: "Vencimento próximo",
+      amount: money(charge.amountCents - charge.paidCents),
+      detail: `${clientName(book, charge.clientId)} · Venc. ${formatDateBR(charge.dueOn)}`,
+      href: "/cobrancas",
+    })),
+  ];
   return (
-    <Shell company={session.org.tradeName} userName={session.userName} alerts={overdueCount(book)}>
-      <p className="mb-4 rounded-lg border border-[#E2E8F0] bg-white px-3 py-2 text-xs text-[#64748B]">
-        Valores fictícios. O Asaas desta tela não cobra de verdade.
-      </p>
+    <Shell
+      company={session.org.tradeName}
+      profileName={session.profileName}
+      profileRole={session.profileRole}
+      profileEmail={session.profileEmail}
+      showAvatar={session.showAvatar}
+      lateCount={late.length}
+      search={search}
+      alerts={alerts}
+    >
       {children}
     </Shell>
   );

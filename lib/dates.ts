@@ -10,6 +10,20 @@ export function formatDateBR(iso: string): string {
   return `${day}/${month}/${year}`;
 }
 
+export function formatDateTimeBR(iso: string | null): string {
+  if (!iso) return "Nunca sincronizado";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Manaus",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 export function addPeriod(iso: string, periodicity: Periodicity, steps: number): string {
   const [year, month, day] = iso.slice(0, 10).split("-").map(Number);
   const date = new Date(Date.UTC(year, month - 1, day));

@@ -7,7 +7,7 @@ import { cents, parseReais } from "../lib/money";
 import { requireSession } from "../lib/session";
 import { catalogSchema, clientSchema, contactSchema, dueSchema, paymentSchema, saleSchema } from "../lib/schemas";
 import { catalogItems, clients, contacts, integrationEvents, organizations } from "../lib/schema";
-import { insertCatalog, insertClient } from "../lib/tenant";
+import { insertCatalog, insertClient, resetOrganization } from "../lib/tenant";
 
 function fail(error: unknown) {
   if (error instanceof DomainError) return { ok: false as const, error: error.message };
@@ -142,22 +142,63 @@ export async function contactAction(raw: unknown) {
   return { ok: true as const };
 }
 
-export async function asaasAction(environment: string, connected: boolean) {
-  const allowed = environment === "sandbox" || environment === "producao" ? environment : "demonstracao";
+const environments = {
+  demonstracao: "Demo",
+  sandbox: "Sandbox",
+  producao: "Produção",
+} as const;
+
+export async function asaasAction(command: "connect" | "disconnect" | "sync" | "demonstracao" | "sandbox" | "producao") {
   const { db, org } = await requireSession();
-  await db
-    .update(organizations)
-    .set({ asaasEnvironment: allowed, asaasConnected: connected, asaasSyncedAt: new Date().toISOString() })
-    .where(eq(organizations.id, org.id));
-  await db.insert(integrationEvents).values({
-    id: crypto.randomUUID(),
-    organizationId: org.id,
-    happenedAt: new Date().toISOString(),
-    kind: connected ? "CONEXAO_SIMULADA" : "DESCONEXAO_SIMULADA",
-    status: "info",
-    description: "Simulação visual. Nenhuma chave foi pedida e nenhuma cobrança saiu para o Asaas.",
-  });
+  const now = new Date().toISOString();
+  if (command === "connect") {
+    await db.update(organizations).set({ asaasConnected: true, asaasEnvironment: "demonstracao", asaasSyncedAt: now }).where(eq(organizations.id, org.id));
+    await db.insert(integrationEvents).values({
+      id: crypto.randomUUID(),
+      organizationId: org.id,
+      happenedAt: now,
+      kind: "CONEXAO_SIMULADA",
+      status: "sucesso",
+      description: "Conta demonstrativa marcada como conectada. Nenhuma chave foi armazenada.",
+    });
+  } else if (command === "disconnect") {
+    await db.update(organizations).set({ asaasConnected: false }).where(eq(organizations.id, org.id));
+    await db.insert(integrationEvents).values({
+      id: crypto.randomUUID(),
+      organizationId: org.id,
+      happenedAt: now,
+      kind: "DESCONEXAO_SIMULADA",
+      status: "info",
+      description: "Simulação desconectada. Nenhuma cobrança foi enviada.",
+    });
+  } else if (command === "sync") {
+    await db.update(organizations).set({ asaasSyncedAt: now }).where(eq(organizations.id, org.id));
+    await db.insert(integrationEvents).values({
+      id: crypto.randomUUID(),
+      organizationId: org.id,
+      happenedAt: now,
+      kind: "SINCRONIZACAO_SIMULADA",
+      status: "sucesso",
+      description: "Sincronização simulada. Nenhuma cobrança saiu para o Asaas.",
+    });
+  } else {
+    await db.update(organizations).set({ asaasEnvironment: command }).where(eq(organizations.id, org.id));
+    await db.insert(integrationEvents).values({
+      id: crypto.randomUUID(),
+      organizationId: org.id,
+      happenedAt: now,
+      kind: "AMBIENTE_VISUAL",
+      status: "info",
+      description: `Ambiente visual alterado para ${environments[command]}. Nenhuma credencial foi pedida.`,
+    });
+  }
   revalidatePath("/integracoes");
+}
+
+export async function resetDemoAction() {
+  const { db, org, userName } = await requireSession();
+  await resetOrganization(db, org.id, userName);
+  revalidatePath("/", "layout");
 }
 
 export async function companyAction(formData: FormData) {

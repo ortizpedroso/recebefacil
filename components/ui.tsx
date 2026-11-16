@@ -7,8 +7,8 @@ export function money(value: number) {
 export function Title({ children, hint }: { children: React.ReactNode; hint: string }) {
   return (
     <div className="mb-5">
-      <h1 className="text-2xl font-semibold tracking-tight">{children}</h1>
-      <p className="mt-1 text-sm text-[#64748B]">{hint}</p>
+      <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">{children}</h1>
+      <p className="mt-0.5 text-xs text-slate-500 sm:text-sm">{hint}</p>
     </div>
   );
 }
