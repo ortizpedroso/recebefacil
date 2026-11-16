@@ -15,6 +15,11 @@ export const organizations = pgTable(
     asaasEnvironment: text("asaas_environment").notNull(),
     asaasConnected: boolean("asaas_connected").notNull(),
     asaasSyncedAt: text("asaas_synced_at"),
+    asaasApiKeyCipher: text("asaas_api_key_cipher"),
+    asaasWebhookCipher: text("asaas_webhook_cipher"),
+    asaasWebhookHash: text("asaas_webhook_hash"),
+    asaasKeyHint: text("asaas_key_hint"),
+    passwordHash: text("password_hash"),
     createdAt: text("created_at").notNull(),
   },
   (table) => [uniqueIndex("organizations_viewer_key").on(table.viewerKey)],
@@ -54,6 +59,7 @@ export const clients = pgTable(
     notes: text("notes").notNull(),
     active: boolean("active").notNull(),
     createdAt: text("created_at").notNull(),
+    asaasCustomerId: text("asaas_customer_id"),
   },
   (table) => [index("clients_org_name").on(table.organizationId, table.name)],
 );
@@ -182,9 +188,27 @@ export const charges = pgTable(
     method: text("method").notNull(),
     status: text("status").notNull(),
     paidOn: text("paid_on"),
+    asaasPaymentId: text("asaas_payment_id"),
+    invoiceUrl: text("invoice_url"),
+    bankSlipUrl: text("bank_slip_url"),
+    pixPayload: text("pix_payload"),
   },
   (table) => [index("charges_org_due").on(table.organizationId, table.dueOn)],
 );
+
+export const authSessions = pgTable("auth_sessions", {
+  id: text("id").primaryKey(),
+  organizationId: text("organization_id").notNull(),
+  tokenHash: text("token_hash").notNull(),
+  expiresAt: text("expires_at").notNull(),
+});
+
+export const webhookEvents = pgTable("webhook_events", {
+  id: text("id").primaryKey(),
+  organizationId: text("organization_id").notNull(),
+  eventId: text("event_id").notNull(),
+  createdAt: text("created_at").notNull(),
+});
 
 export const payments = pgTable(
   "payments",

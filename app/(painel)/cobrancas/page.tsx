@@ -1,7 +1,6 @@
 import { eq } from "drizzle-orm";
-import { CopyLink } from "@/components/copy-link";
 import { Pager } from "@/components/pager";
-import { reverseAction } from "@/app/actions";
+import { issueAsaasChargeAction, reverseAction } from "@/app/actions";
 import { money, Status, Table, Title } from "@/components/ui";
 import { formatDateBR, todayIn } from "@/lib/dates";
 import { displayStatus, pagedCharges } from "@/lib/read";
@@ -17,7 +16,7 @@ export default async function CobrancasPage({ searchParams }: { searchParams: Pr
   const names = new Map(people.map((client) => [client.id, client.name]));
   return (
     <div>
-      <Title hint="O link é desta demonstração. Não existe checkout, Pix real nem boleto registrado.">Cobranças e recebimentos</Title>
+      <Title hint="O link de Pix, boleto ou cartão aparece depois que a cobrança é criada no Asaas.">Cobranças e recebimentos</Title>
       <Table>
         <thead className="bg-slate-50 text-xs text-[#64748B]"><tr><th className="p-3">Código</th><th>Cliente</th><th>Vencimento</th><th>Valor</th><th>Forma</th><th>Status</th><th></th></tr></thead>
         <tbody>
@@ -32,8 +31,14 @@ export default async function CobrancasPage({ searchParams }: { searchParams: Pr
                 <td>{charge.method}</td>
                 <td><Status value={status} /></td>
                 <td className="p-3 text-sm">
-                  <p className="text-xs text-[#64748B]">Link demonstrativo /cobrancas#{charge.code}</p>
-                  <CopyLink path={`/cobrancas#${charge.code}`} />
+                  {charge.invoiceUrl ? <a className="block text-teal-700" href={charge.invoiceUrl}>Fatura Asaas</a> : null}
+                  {charge.bankSlipUrl ? <a className="block text-teal-700" href={charge.bankSlipUrl}>Boleto</a> : null}
+                  {charge.pixPayload ? <p className="max-w-xs break-all text-xs text-[#64748B]">Pix {charge.pixPayload}</p> : null}
+                  {!charge.invoiceUrl ? (
+                    <form action={async () => { "use server"; await issueAsaasChargeAction(charge.id); }}>
+                      <button className="text-teal-700">Emitir no Asaas</button>
+                    </form>
+                  ) : null}
                   {status === "paga" ? (
                     <form action={async () => { "use server"; await reverseAction(charge.id); }}>
                       <button className="text-[#EF4444]">Estornar</button>

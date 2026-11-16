@@ -5,19 +5,19 @@ import { drizzle as drizzlePglite } from "drizzle-orm/pglite";
 import { drizzle as drizzlePg, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "./schema";
+import { applyMigrations } from "./migrate";
 import { SCHEMA_SQL } from "./sql";
 
 export type DB = NodePgDatabase<typeof schema>;
 
 const globalDb = globalThis as unknown as { recebefacilDb?: Promise<DB> };
 
-async function migrate(exec: (statement: string) => Promise<void>) {
+async function migrate(exec: (statement: string) => Promise<void>, query: (statement: string) => Promise<{ id: string }[]>) {
   const statements = SCHEMA_SQL.split(";")
     .map((statement) => statement.trim())
     .filter(Boolean);
-  for (const statement of statements) {
-    await exec(statement);
-  }
+  for (const statement of statements) await exec(statement);
+  await applyMigrations(exec, async () => (await query("select id from schema_migrations")).map((row) => row.id));
 }
 
 export async function openIsolatedDatabase(dir: string): Promise<DB> {
@@ -25,7 +25,10 @@ export async function openIsolatedDatabase(dir: string): Promise<DB> {
   const client = new PGlite(dir);
   await client.waitReady;
   const db = drizzlePglite(client, { schema }) as unknown as DB;
-  await migrate((statement) => client.exec(statement).then(() => undefined));
+  await migrate(
+    (statement) => client.exec(statement).then(() => undefined),
+    async (statement) => ((await client.query<{ id: string }>(statement)).rows),
+  );
   return db;
 }
 
@@ -34,9 +37,12 @@ async function openDatabase(): Promise<DB> {
   if (databaseUrl) {
     const pool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
     const db = drizzlePg(pool, { schema });
-    await migrate(async (statement) => {
-      await pool.query(statement);
-    });
+    await migrate(
+      async (statement) => {
+        await pool.query(statement);
+      },
+      async (statement) => (await pool.query<{ id: string }>(statement)).rows,
+    );
     return db;
   }
   const dir = process.env.RECEBEFACIL_DATA || "/tmp/recebefacil-data";

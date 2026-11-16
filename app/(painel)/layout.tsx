@@ -73,6 +73,7 @@ export default async function PainelLayout({ children }: { children: React.React
       profileEmail={session.profileEmail}
       showAvatar={session.showAvatar}
       lateCount={late.length}
+      readOnly={session.publicDemo}
       search={search}
       alerts={alerts}
     >

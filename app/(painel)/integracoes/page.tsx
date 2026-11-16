@@ -13,6 +13,8 @@ export default async function IntegracoesPage() {
       environment={session.org.asaasEnvironment}
       account={session.org.tradeName}
       syncedAt={formatDateTimeBR(session.org.asaasSyncedAt)}
+      keyHint={session.org.asaasKeyHint || ""}
+      readOnly={session.publicDemo}
       events={events.map((event) => ({
         id: event.id,
         happenedAt: formatDateTimeBR(event.happenedAt),

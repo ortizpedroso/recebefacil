@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useMemo, useState } from "react";
 import {
   AlertTriangle,
@@ -20,7 +20,6 @@ import {
   Plug,
   Receipt,
   Repeat,
-  RotateCcw,
   Search,
   Settings,
   ShoppingCart,
@@ -28,7 +27,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { resetDemoAction } from "@/app/actions";
+import { logoutAction } from "@/app/actions";
 
 const mainNav = [
   { href: "/", label: "Visão geral", icon: LayoutDashboard },
@@ -62,6 +61,7 @@ export function Shell({
   profileEmail,
   showAvatar,
   lateCount,
+  readOnly,
   search,
   alerts,
   children,
@@ -72,18 +72,17 @@ export function Shell({
   profileEmail: string;
   showAvatar: boolean;
   lateCount: number;
+  readOnly: boolean;
   search: ShellSearch[];
   alerts: ShellAlert[];
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [confirmReset, setConfirmReset] = useState(false);
   const current = [...mainNav, ...footerNav].find((item) => (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href))) ?? mainNav[0];
   const results = useMemo(() => {
     const text = query.trim().toLowerCase();
@@ -142,11 +141,8 @@ export function Shell({
           );
         })}
         <div className="flex items-center justify-between px-3 pt-2 text-[11px] text-slate-400">
-          <span>Ambiente demonstrativo</span>
-          <button type="button" className="inline-flex items-center gap-1 font-medium text-slate-500 hover:text-teal-700" onClick={() => setConfirmReset(true)}>
-            <RotateCcw className="h-3 w-3" />
-            Resetar
-          </button>
+          <span>{readOnly ? "Consulta pública" : "Empresa"}</span>
+          {readOnly ? <Link href="/entrar" className="font-medium text-teal-700">Entrar</Link> : null}
         </div>
       </div>
     </div>
@@ -173,7 +169,7 @@ export function Shell({
                 <span className="hidden sm:inline" aria-hidden="true">/</span>
                 <span className="truncate font-semibold text-slate-900">{current.label}</span>
               </div>
-              <p className="hidden text-[11px] text-slate-400 sm:block">Protótipo navegável · Dados financeiros demonstrativos</p>
+              <p className="hidden text-[11px] text-slate-400 sm:block">{readOnly ? "Livro compartilhado, somente consulta" : "Livro da empresa"}</p>
             </div>
           </div>
           <div className="flex items-center gap-2 sm:gap-3">
@@ -251,11 +247,17 @@ export function Shell({
                     <UserCheck className="h-3.5 w-3.5 text-slate-400" /> Perfil e empresa
                   </Link>
                   <Link href="/integracoes" onClick={() => setProfileOpen(false)} className="flex items-center gap-2 px-4 py-2 text-xs text-slate-700 hover:bg-slate-50">
-                    <Plug className="h-3.5 w-3.5 text-slate-400" /> Integração Asaas (Demo)
+                    <Plug className="h-3.5 w-3.5 text-slate-400" /> Integração Asaas
                   </Link>
-                  <button type="button" className="mt-1 flex w-full items-center gap-2 border-t border-slate-100 px-4 py-2 pt-2 text-left text-xs text-slate-700 hover:bg-slate-50" onClick={() => { setProfileOpen(false); setConfirmReset(true); }}>
-                    <LogOut className="h-3.5 w-3.5 text-slate-400" /> Restaurar dados iniciais
-                  </button>
+                  {readOnly ? (
+                    <Link href="/cadastrar" className="mt-1 flex w-full items-center gap-2 border-t border-slate-100 px-4 py-2 text-xs text-slate-700 hover:bg-slate-50">Cadastrar empresa</Link>
+                  ) : (
+                    <form action={logoutAction}>
+                      <button type="submit" className="mt-1 flex w-full items-center gap-2 border-t border-slate-100 px-4 py-2 text-left text-xs text-slate-700 hover:bg-slate-50">
+                        <LogOut className="h-3.5 w-3.5 text-slate-400" /> Sair
+                      </button>
+                    </form>
+                  )}
                 </div>
               ) : null}
             </div>
@@ -263,29 +265,6 @@ export function Shell({
         </header>
         <main className="mx-auto w-full max-w-[1440px] flex-1 p-4 sm:p-6">{children}</main>
       </div>
-      {confirmReset ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <button className="absolute inset-0 bg-slate-900/40" aria-label="Fechar" onClick={() => setConfirmReset(false)} />
-          <div className="relative w-full max-w-md rounded-xl bg-white p-5 shadow-lg">
-            <h2 className="text-sm font-bold text-slate-900">Restaurar dados demonstrativos</h2>
-            <p className="mt-2 text-xs leading-relaxed text-slate-600">Esta ação redefine clientes, vendas, parcelas, contratos e cobranças para o conjunto de demonstração original.</p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button type="button" className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium" onClick={() => setConfirmReset(false)}>Cancelar</button>
-              <button
-                type="button"
-                className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white"
-                onClick={async () => {
-                  await resetDemoAction();
-                  setConfirmReset(false);
-                  router.refresh();
-                }}
-              >
-                Restaurar dados
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }

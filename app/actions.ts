@@ -2,7 +2,11 @@
 
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { authenticate, openAuthSession, registerCompany } from "../lib/accounts";
 import { can, isRole, type Permission } from "../lib/access";
+import { issueAsaasCharge, saveAsaasCredentials, webhookTokenFor } from "../lib/asaas-book";
 import { isPlan, payPlatformInvoice, subscribe } from "../lib/billing";
 import { todayIn } from "../lib/dates";
 import { isValidCnpj } from "../lib/documents";
@@ -10,7 +14,9 @@ import { DomainError, cancelSale, changeDueDate, createSale, registerPayment, re
 import { cents, parseReais } from "../lib/money";
 import { requireSession } from "../lib/session";
 import { catalogSchema, clientSchema, contactSchema, dueSchema, paymentSchema, saleSchema } from "../lib/schemas";
-import { campaignRecipients, campaigns, catalogItems, clients, contacts, fiscalDocuments, integrationEvents, members, organizations, sales, stockMoves, supportTickets } from "../lib/schema";
+import { eraseClient } from "../lib/privacy";
+import { authSessions, campaignRecipients, campaigns, catalogItems, clients, contacts, fiscalDocuments, integrationEvents, members, organizations, sales, stockMoves, supportTickets } from "../lib/schema";
+import { tokenHash } from "../lib/secrets";
 import { insertCatalog, insertClient, resetOrganization, updateCatalog, updateClient } from "../lib/tenant";
 
 function fail(error: unknown) {
@@ -20,6 +26,7 @@ function fail(error: unknown) {
 
 async function allow(permission: Permission) {
   const session = await requireSession();
+  if (session.publicDemo) throw new DomainError("O visitante só consulta o livro compartilhado.");
   if (!can(session.role, permission)) throw new DomainError("Seu papel não pode fazer esta ação.");
   return session;
 }
@@ -127,12 +134,14 @@ export async function payAction(raw: unknown) {
   if (!parsed.success) return { ok: false as const, error: "Revise o pagamento." };
   try {
     const { db, org } = await allow("pagamentos.registrar");
+    const amountCents = parseReais(parsed.data.amount);
     await registerPayment(db, org.id, {
       chargeId: parsed.data.chargeId,
-      amountCents: parseReais(parsed.data.amount),
+      amountCents,
       paidOn: parsed.data.paidOn,
       method: parsed.data.method,
       note: parsed.data.note,
+      idempotencyKey: `manual:${parsed.data.chargeId}:${parsed.data.paidOn}:${amountCents}:${parsed.data.note}`,
     });
     revalidatePath("/parcelas");
     revalidatePath("/");
@@ -232,17 +241,23 @@ export async function asaasAction(command: "connect" | "disconnect" | "sync" | "
       happenedAt: now,
       kind: "CONEXAO_SIMULADA",
       status: "sucesso",
-      description: "Conta demonstrativa marcada como conectada. Nenhuma chave foi armazenada.",
+      description: "Conexão marcada. A chave, se houver, continua só no cofre.",
     });
   } else if (command === "disconnect") {
-    await db.update(organizations).set({ asaasConnected: false }).where(eq(organizations.id, org.id));
+    await db.update(organizations).set({
+      asaasConnected: false,
+      asaasApiKeyCipher: null,
+      asaasWebhookCipher: null,
+      asaasWebhookHash: null,
+      asaasKeyHint: null,
+    }).where(eq(organizations.id, org.id));
     await db.insert(integrationEvents).values({
       id: crypto.randomUUID(),
       organizationId: org.id,
       happenedAt: now,
       kind: "DESCONEXAO_SIMULADA",
       status: "info",
-      description: "Simulação desconectada. Nenhuma cobrança foi enviada.",
+      description: "Chave cifrada apagada.",
     });
   } else if (command === "sync") {
     await db.update(organizations).set({ asaasSyncedAt: now }).where(eq(organizations.id, org.id));
@@ -252,7 +267,7 @@ export async function asaasAction(command: "connect" | "disconnect" | "sync" | "
       happenedAt: now,
       kind: "SINCRONIZACAO_SIMULADA",
       status: "sucesso",
-      description: "Sincronização simulada. Nenhuma cobrança saiu para o Asaas.",
+      description: "Horário de sincronização atualizado.",
     });
   } else {
     await db.update(organizations).set({ asaasEnvironment: command }).where(eq(organizations.id, org.id));
@@ -453,4 +468,97 @@ export async function supportAction(formData: FormData) {
   } catch (error) {
     return fail(error);
   }
+}
+
+const sessionCookie = "recebe_session";
+
+function sessionCookieOptions(expiresAt: string) {
+  return { httpOnly: true, sameSite: "lax" as const, secure: process.env.NODE_ENV === "production", path: "/", expires: new Date(expiresAt) };
+}
+
+export async function signupAction(formData: FormData) {
+  try {
+    const { getDb } = await import("../lib/db");
+    const db = await getDb();
+    const organizationId = await registerCompany(db, {
+      tradeName: String(formData.get("tradeName") || ""),
+      legalName: String(formData.get("legalName") || ""),
+      document: String(formData.get("document") || ""),
+      email: String(formData.get("email") || ""),
+      password: String(formData.get("password") || ""),
+    });
+    const opened = await openAuthSession(db, organizationId);
+    const jar = await cookies();
+    jar.set(sessionCookie, opened.token, sessionCookieOptions(opened.expiresAt));
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function loginAction(formData: FormData) {
+  try {
+    const { getDb } = await import("../lib/db");
+    const db = await getDb();
+    const org = await authenticate(db, String(formData.get("email") || ""), String(formData.get("password") || ""));
+    if (!org) return { ok: false as const, error: "E-mail ou senha não conferem." };
+    const opened = await openAuthSession(db, org.id);
+    const jar = await cookies();
+    jar.set(sessionCookie, opened.token, sessionCookieOptions(opened.expiresAt));
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function logoutAction() {
+  const jar = await cookies();
+  const token = jar.get(sessionCookie)?.value;
+  if (token) {
+    const { getDb } = await import("../lib/db");
+    const db = await getDb();
+    await db.delete(authSessions).where(eq(authSessions.tokenHash, tokenHash(token)));
+  }
+  jar.delete(sessionCookie);
+  redirect("/entrar");
+}
+
+export async function saveAsaasAction(formData: FormData) {
+  try {
+    const { db, org } = await allow("empresa.gravar");
+    const saved = await saveAsaasCredentials(db, org.id, {
+      apiKey: String(formData.get("apiKey") || ""),
+      environment: String(formData.get("environment") || ""),
+    });
+    revalidatePath("/integracoes");
+    return { ok: true as const, accountName: saved.accountName, webhookToken: saved.webhookToken };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function revealWebhookAction() {
+  try {
+    const { org } = await allow("empresa.gravar");
+    return { ok: true as const, webhookToken: await webhookTokenFor(org) };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function issueAsaasChargeAction(chargeId: string) {
+  try {
+    const { db, org } = await allow("pagamentos.registrar");
+    await issueAsaasCharge(db, org.id, chargeId);
+    revalidatePath("/cobrancas");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function deleteClientAction(clientId: string) {
+  const { db, org } = await allow("clientes.gravar");
+  await eraseClient(db, org.id, clientId);
+  redirect("/clientes");
 }

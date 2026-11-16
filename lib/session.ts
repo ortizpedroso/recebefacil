@@ -1,9 +1,9 @@
 import { eq } from "drizzle-orm";
-import { headers } from "next/headers";
-import { getIdentity } from "../cursor/identity";
-import { isRole, type Role } from "./access";
+import { cookies } from "next/headers";
+import { roleLabel, isRole, type Role } from "./access";
 import { getDb, type DB } from "./db";
-import { members, type organizations } from "./schema";
+import { authSessions, members, organizations } from "./schema";
+import { tokenHash } from "./secrets";
 import { ensureOrganization } from "./tenant";
 
 export type Session = {
@@ -37,20 +37,34 @@ async function actorRole(db: DB, organizationId: string, email: string): Promise
   return "administrador";
 }
 
+async function companySession(db: DB, org: typeof organizations.$inferSelect, email: string): Promise<Session> {
+  const role = await actorRole(db, org.id, email);
+  return {
+    db,
+    org,
+    userName: org.tradeName,
+    publicDemo: false,
+    role,
+    profileName: org.tradeName,
+    profileRole: roleLabel(role),
+    profileEmail: email,
+    showAvatar: false,
+  };
+}
+
 export async function requireSession(): Promise<Session> {
-  const headerList = await headers();
-  const identity = await getIdentity({ headers: { get: (name: string) => headerList.get(name) } });
   const db = await getDb();
-  if (!identity.verified) {
-    const org = await ensureOrganization(db, "public:demonstracao", "Visitante");
-    if (!org) throw new Error("Organização indisponível.");
-    const role = await actorRole(db, org.id, "camila@exemplo.com");
-    return { db, org, userName: "Visitante", publicDemo: true, role, ...profileFor("Visitante", true) };
+  const jar = await cookies();
+  const token = jar.get("recebe_session")?.value;
+  if (token) {
+    const [auth] = await db.select().from(authSessions).where(eq(authSessions.tokenHash, tokenHash(token)));
+    if (auth && auth.expiresAt > new Date().toISOString()) {
+      const [org] = await db.select().from(organizations).where(eq(organizations.id, auth.organizationId));
+      if (org) return companySession(db, org, org.email);
+    }
   }
-  const org = await ensureOrganization(db, `${identity.stage}:${identity.sub}`, identity.name || identity.email || "Conta");
+  const org = await ensureOrganization(db, "public:demonstracao", "Visitante");
   if (!org) throw new Error("Organização indisponível.");
-  const userName = identity.name || identity.email || "Conta";
-  const actorEmail = identity.simulated ? "camila@exemplo.com" : identity.email || "";
-  const role = await actorRole(db, org.id, actorEmail);
-  return { db, org, userName, publicDemo: false, role, ...profileFor(userName, identity.simulated) };
+  const role = await actorRole(db, org.id, "camila@exemplo.com");
+  return { db, org, userName: "Visitante", publicDemo: true, role, ...profileFor("Visitante", true) };
 }

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { deleteClientAction } from "@/app/actions";
 import { ClientForm } from "@/components/forms";
 import { Card, money, Status, Table, Title } from "@/components/ui";
 import { formatDateBR } from "@/lib/dates";
@@ -31,7 +32,17 @@ export default async function ClientePage({ params, searchParams }: { params: Pr
   ];
   return (
     <div className="space-y-4">
-      <Link href="/clientes" className="text-sm text-[#2563EB]">Voltar</Link>
+      <div className="flex flex-wrap items-center gap-3">
+        <Link href="/clientes" className="text-sm text-[#2563EB]">Voltar</Link>
+        {session.publicDemo ? null : (
+          <>
+            <a className="text-sm text-teal-700" href={`/api/clientes/${client.id}/export`}>Exportar dados</a>
+            <form action={async () => { "use server"; await deleteClientAction(client.id); }}>
+              <button className="text-sm text-[#EF4444]">Apagar cliente</button>
+            </form>
+          </>
+        )}
+      </div>
       <Title hint={`${client.kind === "pj" ? "Pessoa jurídica" : "Pessoa física"} · ${client.city} ${client.state}`}>
         {client.name}
       </Title>
