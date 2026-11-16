@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
 import {
   RecebeFacilState,
   Cliente,
@@ -22,8 +22,6 @@ import {
 } from '../types/recebefacil';
 import { INITIAL_RECEBEFACIL_STATE } from '../data/mockData';
 import { HOJE_DEMO, addPeriodToDate } from '../utils/formatters';
-
-const STORAGE_KEY = 'recebefacil_saas_demo_v1';
 
 export interface ToastMessage {
   id: string;
@@ -142,27 +140,87 @@ interface RecebeFacilContextValue {
 const RecebeFacilContext = createContext<RecebeFacilContextValue | null>(null);
 
 export const RecebeFacilProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [state, setState] = useState<RecebeFacilState>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        return JSON.parse(saved);
-      }
-    } catch {
-      // Fallback to initial state
-    }
-    return INITIAL_RECEBEFACIL_STATE;
-  });
-
+  const [state, setState] = useState<RecebeFacilState>(INITIAL_RECEBEFACIL_STATE);
+  const [hydrated, setHydrated] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const revisionRef = useRef(0);
+  const echoRef = useRef(true);
+  const savingRef = useRef(false);
+  const pendingRef = useRef<RecebeFacilState | null>(null);
+
+  const persist = async (document: RecebeFacilState) => {
+    if (savingRef.current) {
+      pendingRef.current = document;
+      return;
+    }
+    savingRef.current = true;
+    try {
+      const response = await fetch('/api/book', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ revision: revisionRef.current, document }),
+      });
+      if (response.status === 409) {
+        const fresh = await fetch('/api/book');
+        if (!fresh.ok) return;
+        const body = (await fresh.json()) as { revision: number; document: RecebeFacilState };
+        revisionRef.current = body.revision;
+        echoRef.current = true;
+        pendingRef.current = null;
+        setState(body.document);
+        showToast('O livro foi atualizado em outro lugar. Recarreguei os dados.', 'info');
+        return;
+      }
+      if (!response.ok) return;
+      const body = (await response.json()) as { revision: number };
+      revisionRef.current = body.revision;
+    } finally {
+      savingRef.current = false;
+      const pending = pendingRef.current;
+      if (pending) {
+        pendingRef.current = null;
+        void persist(pending);
+      }
+    }
+  };
 
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      // ignore storage quota errors
+    if (!hydrated) return;
+    if (echoRef.current) {
+      echoRef.current = false;
+      return;
     }
-  }, [state]);
+    const document = state;
+    const timer = setTimeout(() => {
+      void persist(document);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [state, hydrated]);
+
+  useEffect(() => {
+    let cancel = false;
+    void (async () => {
+      try {
+        const response = await fetch('/api/book');
+        if (!response.ok) {
+          if (!cancel) setLoadError('Não foi possível abrir o livro.');
+          return;
+        }
+        const body = (await response.json()) as { revision: number; document: RecebeFacilState };
+        if (cancel) return;
+        revisionRef.current = body.revision;
+        echoRef.current = true;
+        setState(body.document);
+        setHydrated(true);
+      } catch {
+        if (!cancel) setLoadError('Não foi possível abrir o livro.');
+      }
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, []);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -177,7 +235,6 @@ export const RecebeFacilProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const resetDemoData = () => {
-    localStorage.removeItem(STORAGE_KEY);
     setState(INITIAL_RECEBEFACIL_STATE);
     showToast('Dados demonstrativos restaurados para o estado inicial.', 'info');
   };
@@ -1072,7 +1129,13 @@ export const RecebeFacilProvider: React.FC<{ children: React.ReactNode }> = ({ c
         updateConfiguracoes,
       }}
     >
-      {children}
+      {loadError ? (
+        <p className="p-8 text-sm text-rose-700">{loadError}</p>
+      ) : hydrated ? (
+        children
+      ) : (
+        <p className="p-8 text-sm text-slate-600">Carregando o livro...</p>
+      )}
     </RecebeFacilContext.Provider>
   );
 };

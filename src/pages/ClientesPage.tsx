@@ -764,7 +764,7 @@ export const ClientesPage: React.FC<ClientesPageProps> = ({
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         title={editingId ? 'Editar cliente' : 'Cadastrar novo cliente'}
-        subtitle="Os dados são armazenados localmente no ambiente demonstrativo."
+        subtitle="O cadastro entra no livro gravado no banco. A cobrança no Asaas continua demonstrativa."
         size="md"
       >
         <form onSubmit={handleSubmitCliente} className="space-y-4 text-xs">
