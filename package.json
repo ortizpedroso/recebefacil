@@ -1,0 +1,27 @@
+{
+  "name": "recebefacil",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1",
+    "test": "tsx --test src/domain/money.test.ts src/domain/collection.test.ts src/db/ledger.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.3.14",
+    "next": "^16.4.6",
+    "pg": "^8.16.3",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "server-only": "^0.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.1",
+    "@types/pg": "^8.15.6",
+    "@types/react": "^19.1.17",
+    "@types/react-dom": "^19.1.7",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
