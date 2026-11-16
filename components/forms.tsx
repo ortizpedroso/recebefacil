@@ -1,13 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import { roles, roleLabel } from "@/lib/access";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { clientSchema, catalogSchema } from "@/lib/schemas";
+import { clientSchema, catalogSchema, formResolver } from "@/lib/schemas";
 import { lookupCep } from "@/lib/cep";
 import { maskCep, maskCnpj, maskDocument, maskMoney, maskPhone, maskUf } from "@/lib/masks";
-import { companyAction, createCatalogAction, createClientAction, payAction, updateCatalogAction, updateClientAction } from "@/app/actions";
+import { companyAction, createCatalogAction, createClientAction, inviteAction, payAction, supportAction, updateCatalogAction, updateClientAction } from "@/app/actions";
 import { buttonClass, Field, inputClass } from "./ui";
 
 export function ClientForm({
@@ -36,7 +36,7 @@ export function ClientForm({
   const [message, setMessage] = useState("");
   const [cepNote, setCepNote] = useState("");
   const form = useForm({
-    resolver: zodResolver(clientSchema),
+    resolver: formResolver(clientSchema),
     defaultValues: initial
       ? {
           ...initial,
@@ -126,6 +126,8 @@ export function ClientForm({
         <button className={buttonClass} type="submit">{clientId ? "Salvar cliente" : "Cadastrar cliente"}</button>
         {message ? <span className="text-sm text-[#64748B]">{message}</span> : null}
         {form.formState.errors.email?.message ? <span className="text-sm text-[#EF4444]">{form.formState.errors.email.message}</span> : null}
+        {form.formState.errors.document?.message ? <span className="text-sm text-[#EF4444]">{form.formState.errors.document.message}</span> : null}
+        {form.formState.errors.root?.message ? <span className="text-sm text-[#EF4444]">{form.formState.errors.root.message}</span> : null}
         {cepNote ? <span className="text-sm text-[#64748B]">{cepNote}</span> : null}
       </div>
     </form>
@@ -137,15 +139,15 @@ export function CatalogForm({
   initial,
 }: {
   itemId?: string;
-  initial?: { kind: "produto" | "servico"; name: string; description: string; category: string; sku: string; price: string; billing: "pontual" | "recorrente" };
+  initial?: { kind: "produto" | "servico"; name: string; description: string; category: string; sku: string; price: string; billing: "pontual" | "recorrente"; stock: string };
 }) {
   const router = useRouter();
   const [message, setMessage] = useState("");
   const form = useForm({
-    resolver: zodResolver(catalogSchema),
+    resolver: formResolver(catalogSchema),
     defaultValues: initial
-      ? { ...initial, price: maskMoney(initial.price) }
-      : { kind: "produto" as const, name: "", description: "", category: "", sku: "", price: "", billing: "pontual" as const },
+      ? { ...initial, price: maskMoney(initial.price), stock: initial.stock }
+      : { kind: "produto" as const, name: "", description: "", category: "", sku: "", price: "", billing: "pontual" as const, stock: "" },
   });
   return (
     <form
@@ -177,6 +179,7 @@ export function CatalogForm({
         </select>
       </Field>
       <Field label="Referência"><input className={inputClass} {...form.register("sku")} /></Field>
+      <Field label="Estoque"><input className={inputClass} inputMode="numeric" placeholder="Só produto" {...form.register("stock")} /></Field>
       <div className="md:col-span-2">
         <Field label="Descrição"><input className={inputClass} {...form.register("description")} /></Field>
       </div>
@@ -242,8 +245,16 @@ export function CompanyForm({
 }) {
   const [doc, setDoc] = useState(maskCnpj(document));
   const [tel, setTel] = useState(maskPhone(phone));
+  const [message, setMessage] = useState("");
   return (
-    <form action={companyAction} className="grid gap-3 md:grid-cols-2">
+    <form
+      className="grid gap-3 md:grid-cols-2"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        const result = await companyAction(new FormData(event.currentTarget));
+        setMessage(result.ok ? "Empresa salva." : result.error);
+      }}
+    >
       <input name="tradeName" defaultValue={tradeName} className={inputClass} aria-label="Nome fantasia" />
       <input name="legalName" defaultValue={legalName} className={inputClass} aria-label="Razão social" />
       <input name="document" value={doc} onChange={(event) => setDoc(maskCnpj(event.target.value))} className={inputClass} aria-label="CNPJ" inputMode="numeric" placeholder="00.000.000/0000-00" />
@@ -252,6 +263,54 @@ export function CompanyForm({
       <input name="timezone" defaultValue={timezone} className={inputClass} aria-label="Fuso" />
       <input name="address" defaultValue={address} className={`${inputClass} md:col-span-2`} aria-label="Endereço" />
       <button className={buttonClass}>Salvar empresa</button>
+      {message ? <span className="text-sm text-[#64748B]">{message}</span> : null}
+    </form>
+  );
+}
+
+export function InviteForm() {
+  const router = useRouter();
+  const [message, setMessage] = useState("");
+  return (
+    <form
+      className="grid gap-3 md:grid-cols-4"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        const result = await inviteAction(new FormData(event.currentTarget));
+        setMessage(result.ok ? "Pessoa gravada na equipe." : result.error);
+        if (result.ok) {
+          event.currentTarget.reset();
+          router.refresh();
+        }
+      }}
+    >
+      <input name="name" required placeholder="Nome" className={inputClass} aria-label="Nome do convite" />
+      <input name="email" required type="email" placeholder="email@empresa.com" className={inputClass} aria-label="E-mail do convite" />
+      <select name="role" className={inputClass} aria-label="Papel" defaultValue="operador">
+        {roles.map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
+      </select>
+      <button className={buttonClass} type="submit">Convidar</button>
+      {message ? <span className="text-sm text-[#64748B] md:col-span-4">{message}</span> : null}
+    </form>
+  );
+}
+
+export function SupportForm() {
+  const [message, setMessage] = useState("");
+  return (
+    <form
+      className="grid gap-3"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        const result = await supportAction(new FormData(event.currentTarget));
+        setMessage(result.ok ? "Chamado gravado. O canal de resposta é este formulário e o e-mail suporte@recebefacil.app." : result.error);
+        if (result.ok) event.currentTarget.reset();
+      }}
+    >
+      <input name="contact" required placeholder="Seu e-mail ou telefone" className={inputClass} aria-label="Contato" />
+      <textarea name="message" required minLength={5} placeholder="Como podemos ajudar" className={inputClass} aria-label="Mensagem" />
+      <button className={buttonClass} type="submit">Enviar chamado</button>
+      {message ? <p className="text-sm text-[#64748B]">{message}</p> : null}
     </form>
   );
 }

@@ -70,6 +70,7 @@ export const catalogItems = pgTable(
     sku: text("sku").notNull(),
     priceCents: integer("price_cents").notNull(),
     billing: text("billing").notNull(),
+    stockQuantity: integer("stock_quantity"),
     active: boolean("active").notNull(),
   },
   (table) => [index("catalog_org").on(table.organizationId)],
@@ -233,4 +234,79 @@ export const integrationEvents = pgTable("integration_events", {
   kind: text("kind").notNull(),
   status: text("status").notNull(),
   description: text("description").notNull(),
+});
+
+export const subscriptions = pgTable("subscriptions", {
+  id: text("id").primaryKey(),
+  organizationId: text("organization_id").notNull(),
+  planCode: text("plan_code").notNull(),
+  status: text("status").notNull(),
+  trialEndsOn: text("trial_ends_on").notNull(),
+  periodEndsOn: text("period_ends_on").notNull(),
+});
+
+export const platformInvoices = pgTable("platform_invoices", {
+  id: text("id").primaryKey(),
+  organizationId: text("organization_id").notNull(),
+  subscriptionId: text("subscription_id").notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  status: text("status").notNull(),
+  dueOn: text("due_on").notNull(),
+  paidOn: text("paid_on"),
+});
+
+export const fiscalDocuments = pgTable("fiscal_documents", {
+  id: text("id").primaryKey(),
+  organizationId: text("organization_id").notNull(),
+  saleId: text("sale_id").notNull(),
+  number: integer("number").notNull(),
+  series: text("series").notNull(),
+  status: text("status").notNull(),
+  totalCents: integer("total_cents").notNull(),
+  accessKey: text("access_key").notNull(),
+  issuedAt: text("issued_at").notNull(),
+});
+
+export const stockMoves = pgTable("stock_moves", {
+  id: text("id").primaryKey(),
+  organizationId: text("organization_id").notNull(),
+  catalogItemId: text("catalog_item_id").notNull(),
+  saleId: text("sale_id"),
+  quantity: integer("quantity").notNull(),
+  reason: text("reason").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const campaigns = pgTable("campaigns", {
+  id: text("id").primaryKey(),
+  organizationId: text("organization_id").notNull(),
+  body: text("body").notNull(),
+  status: text("status").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const campaignRecipients = pgTable("campaign_recipients", {
+  id: text("id").primaryKey(),
+  organizationId: text("organization_id").notNull(),
+  campaignId: text("campaign_id").notNull(),
+  clientId: text("client_id").notNull(),
+  phone: text("phone").notNull(),
+  body: text("body").notNull(),
+  status: text("status").notNull(),
+});
+
+export const supportTickets = pgTable("support_tickets", {
+  id: text("id").primaryKey(),
+  organizationId: text("organization_id").notNull(),
+  contact: text("contact").notNull(),
+  message: text("message").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const errorEvents = pgTable("error_events", {
+  id: text("id").primaryKey(),
+  organizationId: text("organization_id").notNull(),
+  scope: text("scope").notNull(),
+  message: text("message").notNull(),
+  createdAt: text("created_at").notNull(),
 });

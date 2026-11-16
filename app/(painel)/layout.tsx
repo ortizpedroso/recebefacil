@@ -1,8 +1,10 @@
+import { desc, eq } from "drizzle-orm";
 import { Shell, type ShellAlert, type ShellSearch } from "@/components/shell";
 import { formatDateBR, todayIn } from "@/lib/dates";
 import { money } from "@/components/ui";
 import { advanceRecurrences } from "@/lib/ledger";
 import { clientName, displayStatus, loadBook } from "@/lib/read";
+import { errorEvents } from "@/lib/schema";
 import { requireSession } from "@/lib/session";
 
 export default async function PainelLayout({ children }: { children: React.ReactNode }) {
@@ -36,7 +38,16 @@ export default async function PainelLayout({ children }: { children: React.React
   const soon = book.charges
     .filter((charge) => displayStatus(charge.status, charge.dueOn, book.today, charge.paidCents, charge.amountCents) === "pendente")
     .slice(0, 3);
+  const recentErrors = await session.db.select().from(errorEvents).where(eq(errorEvents.organizationId, session.org.id)).orderBy(desc(errorEvents.createdAt)).limit(5);
   const alerts: ShellAlert[] = [
+    ...recentErrors.map((event) => ({
+      id: event.id,
+      tone: "erro" as const,
+      label: "Erro registrado",
+      amount: event.scope,
+      detail: event.message,
+      href: "/ajuda",
+    })),
     ...late.map((charge) => ({
       id: charge.id,
       tone: "late" as const,

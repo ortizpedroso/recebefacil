@@ -1,8 +1,10 @@
+import { eq } from "drizzle-orm";
 import { headers } from "next/headers";
 import { getIdentity } from "../cursor/identity";
+import { isRole, type Role } from "./access";
 import { getDb, type DB } from "./db";
+import { members, type organizations } from "./schema";
 import { ensureOrganization } from "./tenant";
-import type { organizations } from "./schema";
 
 export type Session = {
   db: DB;
@@ -13,6 +15,7 @@ export type Session = {
   profileRole: string;
   profileEmail: string;
   showAvatar: boolean;
+  role: Role;
 };
 
 function profileFor(name: string, demo: boolean) {
@@ -27,6 +30,13 @@ function profileFor(name: string, demo: boolean) {
   };
 }
 
+async function actorRole(db: DB, organizationId: string, email: string): Promise<Role> {
+  const rows = await db.select().from(members).where(eq(members.organizationId, organizationId));
+  const match = rows.find((row) => row.active && row.email.toLowerCase() === email.toLowerCase());
+  if (match && isRole(match.role)) return match.role;
+  return "administrador";
+}
+
 export async function requireSession(): Promise<Session> {
   const headerList = await headers();
   const identity = await getIdentity({ headers: { get: (name: string) => headerList.get(name) } });
@@ -34,10 +44,13 @@ export async function requireSession(): Promise<Session> {
   if (!identity.verified) {
     const org = await ensureOrganization(db, "public:demonstracao", "Visitante");
     if (!org) throw new Error("Organização indisponível.");
-    return { db, org, userName: "Visitante", publicDemo: true, ...profileFor("Visitante", true) };
+    const role = await actorRole(db, org.id, "camila@exemplo.com");
+    return { db, org, userName: "Visitante", publicDemo: true, role, ...profileFor("Visitante", true) };
   }
   const org = await ensureOrganization(db, `${identity.stage}:${identity.sub}`, identity.name || identity.email || "Conta");
   if (!org) throw new Error("Organização indisponível.");
   const userName = identity.name || identity.email || "Conta";
-  return { db, org, userName, publicDemo: false, ...profileFor(userName, identity.simulated) };
+  const actorEmail = identity.simulated ? "camila@exemplo.com" : identity.email || "";
+  const role = await actorRole(db, org.id, actorEmail);
+  return { db, org, userName, publicDemo: false, role, ...profileFor(userName, identity.simulated) };
 }

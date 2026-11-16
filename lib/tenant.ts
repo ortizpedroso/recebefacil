@@ -11,13 +11,21 @@ import {
   contracts,
   dueChanges,
   installments,
+  campaignRecipients,
+  campaigns,
+  errorEvents,
+  fiscalDocuments,
   integrationEvents,
   members,
   organizations,
   payments,
+  platformInvoices,
   recurrences,
   saleItems,
   sales,
+  stockMoves,
+  subscriptions,
+  supportTickets,
 } from "./schema";
 
 export async function insertClient(
@@ -88,10 +96,12 @@ export async function insertCatalog(
     sku: string;
     priceCents: Cents;
     billing: "pontual" | "recorrente";
+    stockQuantity?: number | null;
   },
 ) {
   const id = randomUUID();
-  await db.insert(catalogItems).values({ id, organizationId, ...input, active: true });
+  const stockQuantity = input.kind === "servico" ? null : input.stockQuantity ?? 0;
+  await db.insert(catalogItems).values({ id, organizationId, ...input, stockQuantity, active: true });
   return id;
 }
 
@@ -107,11 +117,13 @@ export async function updateCatalog(
     sku: string;
     priceCents: Cents;
     billing: "pontual" | "recorrente";
+    stockQuantity?: number | null;
   },
 ) {
   const [row] = await db.select().from(catalogItems).where(and(eq(catalogItems.organizationId, organizationId), eq(catalogItems.id, itemId)));
   if (!row) throw new DomainError("Item não encontrado.");
-  await db.update(catalogItems).set(input).where(eq(catalogItems.id, itemId));
+  const stockQuantity = input.kind === "servico" ? null : input.stockQuantity ?? row.stockQuantity;
+  await db.update(catalogItems).set({ ...input, stockQuantity }).where(eq(catalogItems.id, itemId));
 }
 
 async function sale(db: DB, organizationId: string, input: SaleInput) {
@@ -138,13 +150,13 @@ export async function seedOrganization(db: DB, organizationId: string) {
     });
 
   const joao = await person("João Silva", "111.444.777-35", "Manaus", "AM");
-  const maria = await person("Maria Oliveira", "222.333.444-55", "Belém", "PA");
-  await person("Carlos Santos", "333.222.111-00", "São Paulo", "SP");
-  await person("Ana Pereira", "444.555.666-77", "Recife", "PE");
-  await person("Roberto Almeida", "555.666.777-88", "Curitiba", "PR");
-  await person("Fernanda Costa", "666.777.888-99", "Salvador", "BA");
-  const marcos = await person("Marcos Rodrigues", "777.888.999-00", "Goiânia", "GO");
-  await person("Juliana Ferreira", "888.999.000-11", "Florianópolis", "SC");
+  const maria = await person("Maria Oliveira", "390.533.447-05", "Belém", "PA");
+  await person("Carlos Santos", "529.982.247-25", "São Paulo", "SP");
+  await person("Ana Pereira", "153.509.460-56", "Recife", "PE");
+  await person("Roberto Almeida", "286.255.878-87", "Curitiba", "PR");
+  await person("Fernanda Costa", "455.187.238-57", "Salvador", "BA");
+  const marcos = await person("Marcos Rodrigues", "746.395.180-48", "Goiânia", "GO");
+  await person("Juliana Ferreira", "847.316.280-32", "Florianópolis", "SC");
 
   const terreno = await insertCatalog(db, organizationId, {
     kind: "produto",
@@ -154,6 +166,7 @@ export async function seedOrganization(db: DB, organizationId: string) {
     sku: "IMV-01",
     priceCents: cents(4_500_000),
     billing: "pontual",
+    stockQuantity: 5,
   });
   const ar = await insertCatalog(db, organizationId, {
     kind: "servico",
@@ -172,6 +185,7 @@ export async function seedOrganization(db: DB, organizationId: string) {
     sku: "MOV-01",
     priceCents: cents(1_200_000),
     billing: "pontual",
+    stockQuantity: 3,
   });
   await insertCatalog(db, organizationId, {
     kind: "servico",
@@ -300,6 +314,11 @@ export async function ensureOrganization(db: DB, viewerKey: string, userName: st
     await scoped.execute(sql`select pg_advisory_xact_lock(hashtext(${viewerKey}))`);
     const [existing] = await scoped.select().from(organizations).where(eq(organizations.viewerKey, viewerKey));
     if (existing) {
+      if (existing.document === "34.567.890/0001-12") {
+        const document = "34.567.890/0001-30";
+        await scoped.update(organizations).set({ document }).where(eq(organizations.id, existing.id));
+        existing.document = document;
+      }
       if (existing.tradeName === "Horizonte Comércio") {
         const tradeName = "Horizonte Comércio & Serviços";
         await scoped.update(organizations).set({ tradeName }).where(eq(organizations.id, existing.id));
@@ -313,7 +332,7 @@ export async function ensureOrganization(db: DB, viewerKey: string, userName: st
       viewerKey,
       tradeName: "Horizonte Comércio & Serviços",
       legalName: "Horizonte Comércio Demonstração Ltda",
-      document: "34.567.890/0001-12",
+      document: "34.567.890/0001-30",
       email: "contato@exemplo.com",
       phone: "(92) 3000-0000",
       address: "Av. Eduardo Ribeiro, 100, Centro, Manaus - AM",
@@ -341,7 +360,7 @@ export async function ensureOrganization(db: DB, viewerKey: string, userName: st
 export async function resetOrganization(db: DB, organizationId: string, userName: string) {
   await db.transaction(async (tx) => {
     const scoped = tx as unknown as DB;
-    const rows = [payments, contacts, dueChanges, charges, installments, recurrences, saleItems, contracts, sales, catalogItems, clients, members, integrationEvents];
+    const rows = [campaignRecipients, campaigns, stockMoves, fiscalDocuments, platformInvoices, subscriptions, supportTickets, errorEvents, payments, contacts, dueChanges, charges, installments, recurrences, saleItems, contracts, sales, catalogItems, clients, members, integrationEvents];
     for (const table of rows) {
       await scoped.delete(table).where(eq(table.organizationId, organizationId));
     }

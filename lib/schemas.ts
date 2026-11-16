@@ -1,4 +1,18 @@
 import { z } from "zod";
+import { isValidDocument } from "./documents";
+
+export function formResolver<T>(schema: z.ZodType<T>) {
+  return async (values: unknown) => {
+    const parsed = schema.safeParse(values);
+    if (parsed.success) return { values: parsed.data, errors: {} };
+    const errors: Record<string, { type: string; message: string }> = {};
+    for (const issue of parsed.error.issues) {
+      const key = String(issue.path[0] ?? "root");
+      if (!errors[key]) errors[key] = { type: issue.code, message: issue.message };
+    }
+    return { values: {}, errors };
+  };
+}
 
 export const moneyField = z.string().trim().min(1);
 export const dateField = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -20,6 +34,10 @@ export const clientSchema = z.object({
   number: z.string().trim().max(20),
   complement: z.string().trim().max(80),
   notes: z.string().trim().max(2000),
+}).superRefine((value, context) => {
+  if (!isValidDocument(value.document, value.kind)) {
+    context.addIssue({ code: "custom", path: ["document"], message: value.kind === "pj" ? "CNPJ inválido." : "CPF inválido." });
+  }
 });
 
 export const catalogSchema = z.object({
@@ -30,6 +48,7 @@ export const catalogSchema = z.object({
   sku: z.string().trim().max(40),
   price: moneyField,
   billing: z.enum(["pontual", "recorrente"]),
+  stock: z.string().trim().max(8),
 });
 
 export const saleItemSchema = z.object({

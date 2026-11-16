@@ -4,7 +4,7 @@ import type { Periodicity } from "./dates";
 import { addPeriod } from "./dates";
 import type { DB } from "./db";
 import { cents, splitBalance, type Cents } from "./money";
-import { catalogItems, charges, clients, contracts, dueChanges, installments, payments, recurrences, saleItems, sales } from "./schema";
+import { catalogItems, charges, clients, contracts, dueChanges, installments, payments, recurrences, saleItems, sales, stockMoves } from "./schema";
 
 export class DomainError extends Error {}
 
@@ -108,6 +108,23 @@ export async function createSale(db: DB, organizationId: string, input: SaleInpu
         quantity: item.quantity,
         unitCents: item.unitCents,
         totalCents: item.quantity * item.unitCents,
+      });
+      if (!item.catalogItemId) continue;
+      const [catalog] = await tx
+        .select()
+        .from(catalogItems)
+        .where(and(eq(catalogItems.organizationId, organizationId), eq(catalogItems.id, item.catalogItemId)));
+      if (!catalog || catalog.stockQuantity === null) continue;
+      if (catalog.stockQuantity < item.quantity) throw new DomainError(`Estoque insuficiente para ${item.description}.`);
+      await tx.update(catalogItems).set({ stockQuantity: catalog.stockQuantity - item.quantity }).where(eq(catalogItems.id, catalog.id));
+      await tx.insert(stockMoves).values({
+        id: id(),
+        organizationId,
+        catalogItemId: catalog.id,
+        saleId,
+        quantity: -item.quantity,
+        reason: "venda",
+        createdAt: nowIso(),
       });
     }
 

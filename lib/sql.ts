@@ -54,6 +54,7 @@ create table if not exists catalog_items (
   sku text not null,
   price_cents integer not null,
   billing text not null,
+  stock_quantity integer,
   active boolean not null
 );
 create index if not exists catalog_org on catalog_items (organization_id);
@@ -194,5 +195,73 @@ create table if not exists integration_events (
   kind text not null,
   status text not null,
   description text not null
+);
+alter table catalog_items add column if not exists stock_quantity integer;
+create table if not exists subscriptions (
+  id text primary key,
+  organization_id text not null references organizations(id),
+  plan_code text not null,
+  status text not null,
+  trial_ends_on text not null,
+  period_ends_on text not null
+);
+create table if not exists platform_invoices (
+  id text primary key,
+  organization_id text not null references organizations(id),
+  subscription_id text not null references subscriptions(id),
+  amount_cents integer not null,
+  status text not null,
+  due_on text not null,
+  paid_on text
+);
+create table if not exists fiscal_documents (
+  id text primary key,
+  organization_id text not null references organizations(id),
+  sale_id text not null references sales(id),
+  number integer not null,
+  series text not null,
+  status text not null,
+  total_cents integer not null,
+  access_key text not null,
+  issued_at text not null
+);
+create table if not exists stock_moves (
+  id text primary key,
+  organization_id text not null references organizations(id),
+  catalog_item_id text not null references catalog_items(id),
+  sale_id text references sales(id),
+  quantity integer not null,
+  reason text not null,
+  created_at text not null
+);
+create table if not exists campaigns (
+  id text primary key,
+  organization_id text not null references organizations(id),
+  body text not null,
+  status text not null,
+  created_at text not null
+);
+create table if not exists campaign_recipients (
+  id text primary key,
+  organization_id text not null references organizations(id),
+  campaign_id text not null references campaigns(id),
+  client_id text not null references clients(id),
+  phone text not null,
+  body text not null,
+  status text not null
+);
+create table if not exists support_tickets (
+  id text primary key,
+  organization_id text not null references organizations(id),
+  contact text not null,
+  message text not null,
+  created_at text not null
+);
+create table if not exists error_events (
+  id text primary key,
+  organization_id text not null references organizations(id),
+  scope text not null,
+  message text not null,
+  created_at text not null
 );
 `;
