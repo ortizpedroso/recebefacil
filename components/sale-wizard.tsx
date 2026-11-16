@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createSaleAction } from "@/app/actions";
 import { parseReais, formatBRL, cents } from "@/lib/money";
+import { maskMoney } from "@/lib/masks";
 import { buttonClass, Field, inputClass } from "./ui";
 
 type ClientOption = { id: string; name: string };
@@ -89,7 +90,7 @@ export function SaleWizard({ clients, catalog, today }: { clients: ClientOption[
           <div className="grid gap-2 md:grid-cols-3">
             <input className={inputClass} placeholder="Item avulso" value={custom.description} onChange={(event) => setCustom({ ...custom, description: event.target.value })} />
             <input className={inputClass} type="number" min={1} value={custom.quantity} onChange={(event) => setCustom({ ...custom, quantity: Number(event.target.value) })} />
-            <input className={inputClass} placeholder="Valor" value={custom.price} onChange={(event) => setCustom({ ...custom, price: event.target.value })} />
+            <input className={inputClass} inputMode="numeric" placeholder="0,00" value={custom.price} onChange={(event) => setCustom({ ...custom, price: maskMoney(event.target.value) })} />
           </div>
           <button type="button" className={buttonClass} onClick={addCustom}>Adicionar avulso</button>
           <ul className="text-sm">
@@ -120,8 +121,8 @@ export function SaleWizard({ clients, catalog, today }: { clients: ClientOption[
               <option>Transferência</option>
             </select>
           </Field>
-          <Field label="Desconto"><input className={inputClass} value={discount} onChange={(event) => setDiscount(event.target.value)} /></Field>
-          {mode === "parcelado" ? <Field label="Entrada"><input className={inputClass} value={entry} onChange={(event) => setEntry(event.target.value)} /></Field> : null}
+          <Field label="Desconto"><input className={inputClass} inputMode="numeric" placeholder="0,00" value={discount} onChange={(event) => setDiscount(maskMoney(event.target.value) || "0,00")} /></Field>
+          {mode === "parcelado" ? <Field label="Entrada"><input className={inputClass} inputMode="numeric" placeholder="0,00" value={entry} onChange={(event) => setEntry(maskMoney(event.target.value) || "0,00")} /></Field> : null}
           {mode !== "avista" ? <Field label="Parcelas ou ciclos"><input className={inputClass} type="number" min={1} max={60} value={count} onChange={(event) => setCount(Number(event.target.value))} /></Field> : null}
           <Field label="Primeiro vencimento"><input className={inputClass} type="date" value={firstDue} onChange={(event) => setFirstDue(event.target.value)} /></Field>
         </div>
