@@ -1,0 +1,8 @@
+{
+  "name": "Recebe Fácil ",
+  "description": "O RecebeFácil é uma plataforma de gestão de vendas e recebimentos para empresas e profissionais que comercializam produtos e serviços, realizam vendas parceladas ou trabalham com cobranças recorrentes.\n\nA plataforma permite cadastrar clientes, registrar vendas, organizar contratos, gerar cronogramas de parcelas, acompanhar cobranças e controlar recebimentos.\n\nO sistema possui integração planejada com o Asaas para disponibilizar meios de pagamento e sincronizar o status das cobranças.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
