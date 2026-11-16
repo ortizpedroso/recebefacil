@@ -1,0 +1,159 @@
+import { eq } from "drizzle-orm";
+import { daysLate, delayBand, shiftDays, todayIn } from "./dates";
+import type { DB } from "./db";
+import {
+  catalogItems,
+  charges,
+  clients,
+  contacts,
+  contracts,
+  dueChanges,
+  installments,
+  integrationEvents,
+  members,
+  organizations,
+  payments,
+  recurrences,
+  saleItems,
+  sales,
+} from "./schema";
+
+export async function loadBook(db: DB, organizationId: string, timeZone: string) {
+  const today = todayIn(timeZone);
+  const [clientRows, catalog, saleRows, items, contractRows, installmentRows, recurrenceRows, chargeRows, paymentRows, contactRows, events, memberRows, dueRows] =
+    await Promise.all([
+      db.select().from(clients).where(eq(clients.organizationId, organizationId)),
+      db.select().from(catalogItems).where(eq(catalogItems.organizationId, organizationId)),
+      db.select().from(sales).where(eq(sales.organizationId, organizationId)),
+      db.select().from(saleItems).where(eq(saleItems.organizationId, organizationId)),
+      db.select().from(contracts).where(eq(contracts.organizationId, organizationId)),
+      db.select().from(installments).where(eq(installments.organizationId, organizationId)),
+      db.select().from(recurrences).where(eq(recurrences.organizationId, organizationId)),
+      db.select().from(charges).where(eq(charges.organizationId, organizationId)),
+      db.select().from(payments).where(eq(payments.organizationId, organizationId)),
+      db.select().from(contacts).where(eq(contacts.organizationId, organizationId)),
+      db.select().from(integrationEvents).where(eq(integrationEvents.organizationId, organizationId)),
+      db.select().from(members).where(eq(members.organizationId, organizationId)),
+      db.select().from(dueChanges).where(eq(dueChanges.organizationId, organizationId)),
+    ]);
+  return {
+    today,
+    clients: clientRows,
+    catalog,
+    sales: saleRows,
+    items,
+    contracts: contractRows,
+    installments: installmentRows,
+    recurrences: recurrenceRows,
+    charges: chargeRows,
+    payments: paymentRows,
+    contacts: contactRows,
+    events,
+    members: memberRows,
+    dueChanges: dueRows,
+  };
+}
+
+export type Book = Awaited<ReturnType<typeof loadBook>>;
+
+export function displayStatus(status: string, dueOn: string, today: string, paid: number, amount: number) {
+  if (status === "paga" || status === "cancelada" || status === "estornada") return status;
+  if (paid < amount && dueOn < today) return "vencida";
+  if (paid > 0) return "parcial";
+  return "pendente";
+}
+
+export function periodRange(preset: string, today: string, from?: string, to?: string) {
+  if (preset === "personalizado" && from && to) return { from, to };
+  if (preset === "7") return { from: shiftDays(today, -6), to: today };
+  if (preset === "30") return { from: shiftDays(today, -29), to: today };
+  if (preset === "mes") return { from: `${today.slice(0, 7)}-01`, to: today };
+  if (preset === "anterior") {
+    const [year, month] = today.split("-").map(Number);
+    const start = new Date(Date.UTC(year, month - 2, 1));
+    const end = new Date(Date.UTC(year, month - 1, 0));
+    return { from: start.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
+  }
+  if (preset === "ano") return { from: `${today.slice(0, 4)}-01-01`, to: today };
+  return { from: today, to: today };
+}
+
+function inRange(iso: string, from: string, to: string) {
+  return iso >= from && iso <= to;
+}
+
+export function dashboard(book: Book, from: string, to: string) {
+  const rangedSales = book.sales.filter((sale) => sale.status !== "cancelada" && inRange(sale.soldOn, from, to));
+  const saleIds = new Set(rangedSales.map((sale) => sale.id));
+  const sold = rangedSales.reduce((sum, sale) => sum + sale.totalCents, 0);
+  const received = book.payments
+    .filter((payment) => !payment.reversedAt && inRange(payment.paidOn, from, to))
+    .reduce((sum, payment) => sum + payment.amountCents, 0);
+  const open = book.installments
+    .filter((row) => saleIds.has(row.saleId) && row.status !== "cancelada")
+    .reduce((sum, row) => sum + (row.amountCents - row.paidCents), 0);
+  const lateRows = book.installments.filter(
+    (row) => row.status !== "cancelada" && row.paidCents < row.amountCents && row.dueOn < book.today && inRange(row.dueOn, from, to),
+  );
+  const late = lateRows.reduce((sum, row) => sum + (row.amountCents - row.paidCents), 0);
+  const months = Array.from({ length: 6 }, (_, index) => {
+    const date = new Date(Date.UTC(Number(to.slice(0, 4)), Number(to.slice(5, 7)) - 1 - (5 - index), 1));
+    const key = date.toISOString().slice(0, 7);
+    return {
+      month: key,
+      vendido: book.sales.filter((sale) => sale.status !== "cancelada" && sale.soldOn.startsWith(key)).reduce((sum, sale) => sum + sale.totalCents, 0),
+      recebido: book.payments.filter((payment) => !payment.reversedAt && payment.paidOn.startsWith(key)).reduce((sum, payment) => sum + payment.amountCents, 0),
+    };
+  });
+  const statusCount = ["pendente", "paga", "vencida", "parcial", "cancelada", "estornada"].map((status) => ({
+    status,
+    total: book.charges.filter((charge) => displayStatus(charge.status, charge.dueOn, book.today, charge.paidCents, charge.amountCents) === status).length,
+  }));
+  return {
+    sold,
+    received,
+    open,
+    late,
+    salesCount: rangedSales.length,
+    activeContracts: book.contracts.filter((contract) => contract.status === "ativo").length,
+    activeRecurrences: book.recurrences.filter((recurrence) => recurrence.status === "ativa").length,
+    months,
+    statusCount,
+    nextDues: book.installments
+      .filter((row) => row.status !== "cancelada" && row.paidCents < row.amountCents && row.dueOn >= book.today)
+      .sort((a, b) => a.dueOn.localeCompare(b.dueOn))
+      .slice(0, 5),
+    recentSales: [...rangedSales].sort((a, b) => b.soldOn.localeCompare(a.soldOn)).slice(0, 5),
+    lateCharges: lateRows.slice(0, 5),
+  };
+}
+
+export function clientName(book: Book, clientId: string) {
+  return book.clients.find((client) => client.id === clientId)?.name ?? "Cliente";
+}
+
+export function clientFinance(book: Book, clientId: string) {
+  const ownSales = book.sales.filter((sale) => sale.clientId === clientId && sale.status !== "cancelada");
+  const bought = ownSales.reduce((sum, sale) => sum + sale.totalCents, 0);
+  const paid = book.payments
+    .filter((payment) => !payment.reversedAt && book.charges.some((charge) => charge.id === payment.chargeId && charge.clientId === clientId))
+    .reduce((sum, payment) => sum + payment.amountCents, 0);
+  return { sales: ownSales.length, bought, paid, open: Math.max(bought - paid, 0) };
+}
+
+export function overdueCount(book: Book) {
+  return book.installments.filter((row) => row.status !== "cancelada" && row.paidCents < row.amountCents && row.dueOn < book.today).length;
+}
+
+export function delinquency(book: Book) {
+  return book.charges
+    .map((charge) => {
+      const status = displayStatus(charge.status, charge.dueOn, book.today, charge.paidCents, charge.amountCents);
+      const days = daysLate(charge.dueOn, book.today);
+      const last = book.contacts.filter((contact) => contact.chargeId === charge.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+      return { charge, status, days, band: delayBand(Math.max(days, 1)), last };
+    })
+    .filter((row) => row.status === "vencida");
+}
+
+export type OrgRow = typeof organizations.$inferSelect;
