@@ -50,7 +50,7 @@ const billingOf = (kind: CatalogKind) => (kind === "mensalidade" ? "recorrente" 
 
 export async function insertCatalog(db: DB, organizationId: string, input: CatalogInput) {
   const id = randomUUID();
-  const stockQuantity = tracksStock(input.kind) ? input.stockQuantity ?? 0 : null;
+  const stockQuantity = tracksStock(input.kind) ? input.stockQuantity ?? null : null;
   await db.insert(catalogItems).values({ id, organizationId, ...input, billing: billingOf(input.kind), stockQuantity, active: true });
   return id;
 }
@@ -58,7 +58,7 @@ export async function insertCatalog(db: DB, organizationId: string, input: Catal
 export async function updateCatalog(db: DB, organizationId: string, itemId: string, input: CatalogInput) {
   const [row] = await db.select().from(catalogItems).where(and(eq(catalogItems.organizationId, organizationId), eq(catalogItems.id, itemId)));
   if (!row) throw new DomainError("Item não encontrado.");
-  const stockQuantity = tracksStock(input.kind) ? input.stockQuantity ?? row.stockQuantity : null;
+  const stockQuantity = tracksStock(input.kind) ? input.stockQuantity ?? null : null;
   await db.update(catalogItems).set({ ...input, billing: billingOf(input.kind), stockQuantity }).where(eq(catalogItems.id, itemId));
   if (stockQuantity !== null && stockQuantity !== row.stockQuantity) {
     await db.insert(stockMoves).values({ id: randomUUID(), organizationId, catalogItemId: itemId, saleId: null, quantity: stockQuantity - (row.stockQuantity ?? 0), reason: "ajuste", createdAt: new Date().toISOString() });

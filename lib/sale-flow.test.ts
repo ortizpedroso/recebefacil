@@ -7,7 +7,7 @@ import { addClient, addOrganization, saleInput, testDatabase } from "./test-supp
 import { previewDraft, trimmedRows, type Draft } from "./sale-draft";
 import { catalogImages, catalogItems, charges, clients, contracts, organizations, payments, recurrences, sales } from "./schema";
 import { clientSchema, saleSchema, toClientInput } from "./schemas";
-import { insertCatalog, ensureOrganization } from "./tenant";
+import { insertCatalog, ensureOrganization, updateCatalog } from "./tenant";
 import { loadCatalogPhoto, parsePhoto, saveCatalogPhoto } from "./photos";
 
 const newClient = { kind: "pf" as const, name: "Cliente Novo", document: "", email: "", phone: "(11) 98877-1020", whatsapp: "(11) 98877-1020", zip: "", state: "", city: "", district: "", street: "", number: "", complement: "", notes: "" };
@@ -171,4 +171,18 @@ test("a venda aceita cliente já cadastrado ou cliente novo, nunca os dois nem n
   assert.equal(saleSchema.safeParse({ ...sale, clientId: "3f2b8c3e-8f3a-4a52-9c1e-0e8d7b6a5f4d" }).success, true);
   assert.equal(saleSchema.safeParse(sale).success, false);
   assert.equal(saleSchema.safeParse({ ...sale, newClient: person, clientId: "3f2b8c3e-8f3a-4a52-9c1e-0e8d7b6a5f4d" }).success, false);
+});
+
+test("produto cadastrado sem estoque vende sem travar, e limpar o estoque na edição deixa de controlar", async () => {
+  const db = await testDatabase();
+  const org = await addOrganization(db, "org-estoque");
+  const terreno = await insertCatalog(db, org, { kind: "produto", name: "Terreno", description: "", category: "", sku: "", priceCents: cents(12_000_000), stockQuantity: null });
+  const item = { catalogItemId: terreno, description: "Terreno", kind: "produto" as const, quantity: 1, unitCents: cents(12_000_000) };
+  await createSale(db, org, saleInput("", { mode: "avista", firstDue: "2026-11-17", items: [item] }), newClient);
+  await createSale(db, org, saleInput("", { mode: "avista", firstDue: "2026-11-17", items: [item] }), { ...newClient, name: "Outro Cliente" });
+
+  const controlado = await insertCatalog(db, org, { kind: "produto", name: "Sérum", description: "", category: "", sku: "", priceCents: cents(9_000), stockQuantity: 2 });
+  await updateCatalog(db, org, controlado, { kind: "produto", name: "Sérum", description: "", category: "", sku: "", priceCents: cents(9_000), stockQuantity: null });
+  const [row] = await db.select().from(catalogItems).where(eq(catalogItems.id, controlado));
+  assert.equal(row.stockQuantity, null);
 });

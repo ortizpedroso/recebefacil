@@ -3,6 +3,8 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   serverExternalPackages: ["@electric-sql/pglite"],
   agentRules: false,
+  // Sem isto o Next bloqueia o JavaScript da página em http://127.0.0.1 durante o desenvolvimento e nenhum botão responde.
+  allowedDevOrigins: ["127.0.0.1"],
   experimental: {
     // A foto do produto pode ter 1 MB, e o limite padrão das ações do servidor também é 1 MB.
     serverActions: { bodySizeLimit: "2mb" },
