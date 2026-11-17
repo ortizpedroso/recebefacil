@@ -4,8 +4,9 @@ import { useEffect, useState } from "react";
 
 const EVENT = "recebefacil:toast";
 
-export function toast(message: string) {
-  window.dispatchEvent(new CustomEvent(EVENT, { detail: message }));
+// Aviso longo precisa de mais tempo de leitura.
+export function toast(message: string, ms = 3200) {
+  window.dispatchEvent(new CustomEvent(EVENT, { detail: { message, ms } }));
 }
 
 export function Toaster() {
@@ -13,9 +14,10 @@ export function Toaster() {
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     const show = (event: Event) => {
-      setMessage(String((event as CustomEvent).detail));
+      const { message: text, ms } = (event as CustomEvent<{ message: string; ms: number }>).detail;
+      setMessage(text);
       clearTimeout(timer);
-      timer = setTimeout(() => setMessage(""), 3200);
+      timer = setTimeout(() => setMessage(""), ms);
     };
     window.addEventListener(EVENT, show);
     return () => {

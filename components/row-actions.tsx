@@ -52,7 +52,8 @@ function PayForm({ data, today, onDone }: { data: RowActionData; today: string; 
           setError(result.error);
           return;
         }
-        toast("Recebido. O recibo já está pronto.");
+        if (result.warning) toast(result.warning, 9000);
+        else toast("Recebido. O recibo já está pronto.");
         onDone();
         router.refresh();
       }}
@@ -114,7 +115,8 @@ function UndoForm({ data, onDone }: { data: RowActionData; onDone: () => void })
               setError(result.error);
               return;
             }
-            toast("Recebimento desfeito.");
+            if (result.warning) toast(result.warning, 9000);
+            else toast("Recebimento desfeito.");
             onDone();
             router.refresh();
           }}

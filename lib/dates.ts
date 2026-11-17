@@ -1,7 +1,7 @@
 export type Periodicity = "semanal" | "quinzenal" | "mensal" | "trimestral" | "semestral" | "anual";
 
-export function todayIn(timeZone: string): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date());
+export function todayIn(timeZone: string, now: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone }).format(now);
 }
 
 export function formatDateBR(iso: string): string {

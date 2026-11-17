@@ -1,10 +1,13 @@
 import Link from "next/link";
+import { after } from "next/server";
 import { asc, eq } from "drizzle-orm";
 import { ChargeMenu } from "@/components/charge-menu";
 import { ReceivableList } from "@/components/receivable-row";
 import { buttonClass, Empty, money, Title } from "@/components/ui";
 import { can } from "@/lib/access";
+import { reconcileAsaasThrottled } from "@/lib/asaas-settle";
 import { todayIn } from "@/lib/dates";
+import { logWarning } from "@/lib/log";
 import { rowContext } from "@/lib/pay-link";
 import { BUCKET_LABELS, BUCKETS, bucketCounts, bucketTotal, isBucket, listReceivables, type Bucket } from "@/lib/receivables";
 import { clients } from "@/lib/schema";
@@ -24,6 +27,7 @@ export default async function ReceberPage({ searchParams }: { searchParams: Prom
   const session = await requireSession();
   const { db, org } = session;
   const today = todayIn(org.timezone);
+  after(() => reconcileAsaasThrottled(db, org.id).catch((error: unknown) => logWarning("asaas.reconciliacao", error)));
   const q = (params.q ?? "").trim();
   const [context, counts] = await Promise.all([rowContext(session), bucketCounts(db, org.id, today, q)]);
   const active: Bucket = isBucket(params.filtro) ? params.filtro : counts.atrasadas > 0 ? "atrasadas" : "mes";

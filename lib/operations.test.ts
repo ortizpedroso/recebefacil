@@ -26,9 +26,6 @@ async function org() {
     phone: "(92) 90000-0000",
     address: "Rua 1",
     timezone: "America/Manaus",
-    asaasEnvironment: "demonstracao",
-    asaasConnected: false,
-    asaasSyncedAt: null,
     createdAt: "2026-11-16T00:00:00.000Z",
   });
   return { db, organizationId };

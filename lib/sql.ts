@@ -282,6 +282,46 @@ create table if not exists catalog_images (
   created_at text not null
 );
 create unique index if not exists catalog_images_item on catalog_images (catalog_item_id);
+alter table organizations add column if not exists receiving_mode text not null default 'gestao' check (receiving_mode in ('gestao', 'integrado'));
+alter table organizations add column if not exists asaas_wallet_id text not null default '';
+alter table organizations add column if not exists asaas_account_name text not null default '';
+alter table organizations alter column asaas_environment set default 'demonstracao';
+alter table organizations alter column asaas_connected set default false;
+alter table clients add column if not exists asaas_customer_id text;
+alter table charges add column if not exists asaas_payment_id text;
+alter table charges add column if not exists asaas_billing_type text;
+alter table charges add column if not exists asaas_invoice_url text;
+alter table charges add column if not exists asaas_bank_slip_url text;
+alter table charges add column if not exists asaas_identification_field text;
+alter table charges add column if not exists asaas_pix_payload text;
+alter table charges add column if not exists asaas_pix_image text;
+alter table charges add column if not exists asaas_pix_expires_at text;
+alter table charges add column if not exists asaas_value_cents integer;
+alter table charges add column if not exists asaas_synced_at text;
+create unique index if not exists charges_org_asaas_payment on charges (organization_id, asaas_payment_id) where asaas_payment_id is not null;
+create table if not exists platform_settings (
+  id text primary key check (id = 'default'),
+  asaas_environment text not null default 'sandbox' check (asaas_environment in ('sandbox', 'producao')),
+  asaas_api_key_enc text not null default '',
+  asaas_api_key_hint text not null default '',
+  asaas_wallet_id text not null default '',
+  asaas_account_name text not null default '',
+  asaas_webhook_token_enc text not null default '',
+  asaas_webhook_token_hint text not null default '',
+  platform_fee_bp integer not null default 150 check (platform_fee_bp between 0 and 2000),
+  plan_gestao_cents integer not null default 4990 check (plan_gestao_cents >= 0),
+  plan_integrado_cents integer not null default 3990 check (plan_integrado_cents >= 0),
+  updated_at text not null default '',
+  updated_by text not null default ''
+);
+insert into platform_settings (id) values ('default') on conflict (id) do nothing;
+create table if not exists asaas_webhook_events (
+  id text primary key,
+  event text not null,
+  payment_id text,
+  received_at text not null,
+  processed_at text
+);
 `;
 
 // Blocos com ponto e vírgula interno rodam inteiros, na ordem, depois do SCHEMA_SQL.

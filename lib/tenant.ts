@@ -19,7 +19,6 @@ import {
   catalogImages,
   errorEvents,
   fiscalDocuments,
-  integrationEvents,
   members,
   organizations,
   payments,
@@ -231,14 +230,6 @@ export async function seedOrganization(db: DB, organizationId: string) {
     { id: randomUUID(), organizationId, name: "Rafael Nogueira", email: "rafael@exemplo.com", role: "financeiro", active: true },
     { id: randomUUID(), organizationId, name: "Beatriz Lima", email: "beatriz@exemplo.com", role: "vendedor", active: true },
   ]);
-  await db.insert(integrationEvents).values({
-    id: randomUUID(),
-    organizationId,
-    happenedAt: new Date().toISOString(),
-    kind: "AMBIENTE_INICIALIZADO",
-    status: "info",
-    description: "Módulo do Asaas preparado só para demonstração. Nenhuma chave foi guardada.",
-  });
 }
 
 export const PUBLIC_DEMO_KEY = "public:demonstracao";
@@ -281,9 +272,6 @@ export async function ensureOrganization(db: DB, viewerKey: string, userName: st
       id,
       viewerKey,
       ...(demo ? DEMO_COMPANY : NEW_COMPANY),
-      asaasEnvironment: "demonstracao",
-      asaasConnected: false,
-      asaasSyncedAt: null,
       createdAt: new Date().toISOString(),
     });
     // Só a demonstração pública nasce com dados de exemplo. Empresa nova começa vazia.
@@ -305,7 +293,7 @@ export async function ensureOrganization(db: DB, viewerKey: string, userName: st
 export async function resetOrganization(db: DB, organizationId: string, userName: string) {
   await db.transaction(async (tx) => {
     const scoped = tx as unknown as DB;
-    const rows = [campaignRecipients, campaigns, stockMoves, fiscalDocuments, platformInvoices, subscriptions, supportTickets, errorEvents, payments, contacts, dueChanges, charges, recurrences, saleItems, contracts, sales, catalogImages, catalogItems, clients, members, integrationEvents];
+    const rows = [campaignRecipients, campaigns, stockMoves, fiscalDocuments, platformInvoices, subscriptions, supportTickets, errorEvents, payments, contacts, dueChanges, charges, recurrences, saleItems, contracts, sales, catalogImages, catalogItems, clients, members];
     for (const table of rows) {
       await scoped.delete(table).where(eq(table.organizationId, organizationId));
     }

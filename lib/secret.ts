@@ -46,3 +46,8 @@ export function verifyToken(token: string, secret: string = masterSecret()): str
   if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
   return payload;
 }
+
+// O agendador externo prova que conhece o segredo mestre sem nunca enviá-lo: manda só este resumo.
+export function cronSecret(secret: string = masterSecret()): string {
+  return createHmac("sha256", secret).update("cron:asaas").digest("hex");
+}

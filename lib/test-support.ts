@@ -22,9 +22,6 @@ export async function addOrganization(db: DB, id: string) {
     phone: "",
     address: "",
     timezone: "America/Sao_Paulo",
-    asaasEnvironment: "demonstracao",
-    asaasConnected: false,
-    asaasSyncedAt: null,
     createdAt: new Date().toISOString(),
   });
   return id;

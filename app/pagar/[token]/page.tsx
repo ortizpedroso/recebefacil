@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { CopyButton } from "@/components/copy-button";
+import { PayOnline } from "@/components/pay-online";
 import { Toaster } from "@/components/toast";
 import { ProductPhoto, secondaryButtonClass } from "@/components/ui";
 import { money } from "@/components/ui";
@@ -59,7 +60,10 @@ export default async function PagarPage({ params }: { params: Promise<{ token: s
         <section className="rounded-xl border border-[#E2E8F0] bg-white p-5 text-center text-sm text-slate-600">Esta cobrança foi cancelada. Não é preciso pagar.</section>
       ) : null}
 
-      {page.state === "open" ? (
+      {page.state === "open" && page.online ? <PayOnline token={token} valueCents={page.totalCents} needsDocument={page.online.needsDocument} /> : null}
+      {page.state === "open" && page.online && company.instructions ? <p className="whitespace-pre-line px-1 text-sm text-slate-600">{company.instructions}</p> : null}
+
+      {page.state === "open" && !page.online ? (
         <section className="space-y-3 rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-sm">
           <h2 className="font-bold text-slate-900">Como pagar</h2>
           {company.pixKey ? (

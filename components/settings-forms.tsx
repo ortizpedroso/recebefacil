@@ -2,11 +2,11 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { companyAction, inviteAction, receivingAction, roleAction, supportAction } from "@/app/actions";
+import { companyAction, connectAsaasAction, disconnectAsaasAction, inviteAction, receivingAction, roleAction, supportAction } from "@/app/actions";
 import { roleLabel, roles } from "@/lib/access";
 import { BRAZIL_ZONES, isBrazilZone } from "@/lib/zones";
 import { maskCpfOrCnpj, maskPhone } from "@/lib/masks";
-import { formatPercentBp } from "@/lib/money";
+import { formatPercent, formatPercentBp } from "@/lib/money";
 import { FormError } from "./dialog";
 import { toast } from "./toast";
 import { buttonClass, Field, inputClass, secondaryButtonClass } from "./ui";
@@ -80,10 +80,50 @@ export function CompanyForm({ company }: { company: { tradeName: string; legalNa
   );
 }
 
-export function ReceivingForm({ pixKey, instructions, asaasConnected }: { pixKey: string; instructions: string; asaasConnected: boolean }) {
+export type ReceivingOffer = { available: boolean; feeBp: number; environment: "sandbox" | "producao" };
+export type ReceivingLink = { accountName: string; walletTail: string } | null;
+
+const ASAAS_SIGNUP = { sandbox: "https://sandbox.asaas.com/", producao: "https://www.asaas.com/" } as const;
+
+export function ReceivingForm({ pixKey, instructions, initialMode, link, offer }: { pixKey: string; instructions: string; initialMode: "gestao" | "integrado"; link: ReceivingLink; offer: ReceivingOffer }) {
   const router = useRouter();
+  const [mode, setMode] = useState(initialMode);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [connecting, setConnecting] = useState(false);
+  const [replacing, setReplacing] = useState(false);
+  const integratedOn = mode === "integrado";
+  const card = (on: boolean) => `flex cursor-pointer items-start gap-3 rounded-xl border-[1.5px] p-3 ${on ? "border-teal-700 bg-teal-50" : "border-[#E2E8F0]"}`;
+
+  async function connect() {
+    setConnecting(true);
+    setError("");
+    const result = await connectAsaasAction(apiKey);
+    setConnecting(false);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    setApiKey("");
+    setReplacing(false);
+    setMode("integrado");
+    toast("Conta Asaas conectada.");
+    router.refresh();
+  }
+
+  async function disconnect() {
+    setError("");
+    const result = await disconnectAsaasAction();
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    setMode("gestao");
+    toast("Conta Asaas desconectada. Você voltou para o modo Gestão.");
+    router.refresh();
+  }
+
   return (
     <form
       className="space-y-5"
@@ -103,24 +143,80 @@ export function ReceivingForm({ pixKey, instructions, asaasConnected }: { pixKey
     >
       <fieldset className="space-y-2">
         <legend className="mb-1 text-sm font-semibold text-slate-900">Como você recebe</legend>
-        <label className={`flex cursor-pointer items-start gap-3 rounded-xl border-[1.5px] p-3 ${asaasConnected ? "border-[#E2E8F0]" : "border-teal-700 bg-teal-50"}`}>
-          <input type="radio" name="mode" value="gestao" className="mt-1 accent-teal-700" defaultChecked={!asaasConnected} />
+        <label className={card(!integratedOn)}>
+          <input type="radio" name="mode" value="gestao" className="mt-1 accent-teal-700" checked={!integratedOn} onChange={() => setMode("gestao")} />
           <span>
             <span className="block font-semibold text-slate-900">Gestão</span>
             <span className="block text-[13px] text-slate-600">Seu cliente paga como você combinar (Pix, dinheiro, transferência) e você marca Recebi.</span>
           </span>
         </label>
-        <label className="flex cursor-not-allowed items-start gap-3 rounded-xl border-[1.5px] border-[#E2E8F0] bg-slate-50 p-3 opacity-80">
-          <input type="radio" name="mode" value="integrado" className="mt-1" disabled />
+        <label className={`${card(integratedOn)} ${offer.available ? "" : "cursor-not-allowed bg-slate-50 opacity-80"}`}>
+          <input type="radio" name="mode" value="integrado" className="mt-1 accent-teal-700" checked={integratedOn} disabled={!offer.available} onChange={() => setMode("integrado")} />
           <span>
             <span className="block font-semibold text-slate-900">
-              Integrado <span className="ml-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">Disponível em breve</span>
+              Integrado {offer.available ? null : <span className="ml-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">Ainda indisponível</span>}
             </span>
-            <span className="block text-[13px] text-slate-600">Pix, boleto e cartão pelo Asaas, com baixa automática quando o cliente paga.</span>
+            <span className="block text-[13px] text-slate-600">Pix, boleto e cartão pelo Asaas, com baixa automática quando o cliente paga. Você ainda pode marcar Recebi.</span>
           </span>
         </label>
       </fieldset>
-      <Field label="Chave Pix" hint="aparece no link de pagamento">
+
+      {integratedOn && offer.available ? (
+        <div className="space-y-3 rounded-xl border border-[#E2E8F0] bg-slate-50 p-4">
+          <p className="text-sm text-slate-700">Você recebe direto na sua conta Asaas. A plataforma fica com {formatPercent(offer.feeBp)}% de cada pagamento.</p>
+          {offer.environment === "sandbox" ? <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">Ambiente de testes: use uma conta e uma chave do sandbox. Nenhum dinheiro de verdade se move.</p> : null}
+          {link && !replacing ? (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-slate-800">
+                <span className="font-semibold">Conta conectada:</span> {link.accountName || "conta Asaas"} · carteira ••••{link.walletTail}
+              </p>
+              <span className="flex gap-2">
+                <button type="button" className={secondaryButtonClass} onClick={() => setReplacing(true)}>
+                  Trocar conta
+                </button>
+                <button type="button" className={secondaryButtonClass} onClick={disconnect}>
+                  Desconectar
+                </button>
+              </span>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Field label="Chave de API da sua conta Asaas" hint="usada uma vez para achar sua conta e depois descartada">
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  className={inputClass}
+                  value={apiKey}
+                  onChange={(event) => setApiKey(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void connect();
+                    }
+                  }}
+                  placeholder="cole a chave que você copiou no Asaas"
+                />
+              </Field>
+              <div className="flex flex-wrap items-center gap-3">
+                <button type="button" className={buttonClass} disabled={connecting || apiKey.trim().length < 6} onClick={connect}>
+                  {connecting ? "Conectando..." : "Conectar conta Asaas"}
+                </button>
+                {replacing ? (
+                  <button type="button" className="text-sm font-semibold text-slate-600 hover:underline" onClick={() => setReplacing(false)}>
+                    Cancelar
+                  </button>
+                ) : null}
+                <a href={ASAAS_SIGNUP[offer.environment]} target="_blank" rel="noopener noreferrer" className="text-sm font-semibold text-teal-700 hover:underline">
+                  Ainda não tem conta? Abra a sua no Asaas
+                </a>
+              </div>
+              <p className="text-[13px] text-slate-500">No Asaas, a chave fica em Integrações, Chaves de API.</p>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      <Field label="Chave Pix" hint="aparece no link de pagamento no modo Gestão">
         <input name="pixKey" className={inputClass} defaultValue={pixKey} placeholder="CPF, CNPJ, e-mail, telefone ou chave aleatória" />
       </Field>
       <Field label="Instruções de pagamento" hint="o cliente lê isto ao pagar">

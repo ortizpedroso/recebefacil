@@ -21,7 +21,7 @@ const mainNav = [
 const moreNav = { href: "/mais", label: "Mais", icon: MoreHorizontal };
 
 // Páginas que moram dentro de "Mais" acendem esse item do menu.
-const MORE_PAGES = ["/mais", "/relatorios", "/recebimentos", "/configuracoes", "/equipe", "/assinatura", "/ajuda", "/termos", "/privacidade"];
+const MORE_PAGES = ["/mais", "/relatorios", "/recebimentos", "/plataforma", "/configuracoes", "/equipe", "/assinatura", "/ajuda", "/termos", "/privacidade"];
 
 const ROUTE_LABELS: [string, string][] = [
   ["/vendas/nova", "Nova venda"],
@@ -43,7 +43,7 @@ const ROUTE_LABELS: [string, string][] = [
   ["/busca", "Busca"],
   ["/fiscal", "Notas fiscais"],
   ["/mensagens", "Mensagens"],
-  ["/integracoes", "Integrações"],
+  ["/plataforma", "Plataforma"],
 ];
 
 export type ShellSearch = { kind: string; title: string; subtitle: string; href: string; haystack: string };

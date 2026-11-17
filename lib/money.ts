@@ -24,6 +24,11 @@ export function parsePercentBp(input: string): number {
   return parseReais(input.replace(/%/g, ""));
 }
 
+// "1,5" e "2", sem zeros sobrando, para frases como "a plataforma fica com 1,5%".
+export function formatPercent(bp: number): string {
+  return String(bp / 100).replace(".", ",");
+}
+
 export function formatPercentBp(bp: number): string {
   return (bp / 100).toFixed(2).replace(".", ",");
 }

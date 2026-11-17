@@ -3,23 +3,28 @@
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { can, isRole, type Permission } from "../lib/access";
+import { AsaasError } from "../lib/asaas";
+import { linkMerchantAccount, setReceivingMode, unlinkMerchantAccount } from "../lib/asaas-merchant";
+import { receiveManually, reverseWithAsaas } from "../lib/asaas-settle";
 import { isPlan, payPlatformInvoice, subscribe } from "../lib/billing";
 import { todayIn } from "../lib/dates";
 import { documentKind, isValidCnpj } from "../lib/documents";
 import { DomainError } from "../lib/errors";
-import { cancelSale, changeDueDate, createCharge, createContractForSale, createSale, deleteSale, endSubscription, registerPayment, reverseCharge, updateSale, type SaleInput } from "../lib/ledger";
+import { cancelSale, changeDueDate, createCharge, createContractForSale, createSale, deleteSale, endSubscription, updateSale, type SaleInput } from "../lib/ledger";
 import { lateSettingsError } from "../lib/late";
 import { cents, parsePercentBp, parseReais } from "../lib/money";
 import { parsePhoto, saveCatalogPhoto } from "../lib/photos";
+import { isPlatformOwner } from "../lib/platform-owner";
+import { generateWebhookToken, parsePlatformForm, savePlatformSettings, testPlatformConnection } from "../lib/platform-settings";
 import { requireSession } from "../lib/session";
 import { catalogSchema, chargeSchema, clientSchema, dueSchema, paymentSchema, saleSchema, toClientInput } from "../lib/schemas";
 import type { z } from "zod";
-import { campaignRecipients, campaigns, catalogItems, clients, fiscalDocuments, integrationEvents, members, organizations, sales, supportTickets } from "../lib/schema";
+import { campaignRecipients, campaigns, catalogItems, clients, fiscalDocuments, members, organizations, sales, supportTickets } from "../lib/schema";
 import { insertCatalog, insertClient, resetOrganization, updateCatalog, updateClient } from "../lib/tenant";
 import { isBrazilZone } from "../lib/zones";
 
 function fail(error: unknown) {
-  if (error instanceof DomainError) return { ok: false as const, error: error.message };
+  if (error instanceof DomainError || error instanceof AsaasError) return { ok: false as const, error: error.message };
   console.error(error);
   return { ok: false as const, error: "Não foi possível concluir. Revise os dados." };
 }
@@ -27,6 +32,13 @@ function fail(error: unknown) {
 async function allow(permission: Permission) {
   const session = await requireSession();
   if (!can(session.role, permission)) throw new DomainError("Seu papel não pode fazer esta ação.");
+  return session;
+}
+
+// Só o dono da plataforma mexe nas credenciais. Quem não é dono recebe a mesma recusa de quem não tem papel.
+async function owner() {
+  const session = await requireSession();
+  if (!isPlatformOwner(session)) throw new DomainError("Só o dono da plataforma pode fazer esta ação.");
   return session;
 }
 
@@ -174,7 +186,7 @@ export async function payAction(raw: unknown) {
   if (!parsed.success) return { ok: false as const, error: "Revise o valor e a data do recebimento." };
   try {
     const { db, org } = await allow("pagamentos.registrar");
-    const paymentId = await registerPayment(db, org.id, {
+    const { paymentId, warning } = await receiveManually(db, org.id, {
       chargeId: parsed.data.chargeId,
       amountCents: parseReais(parsed.data.amount),
       feeCents: parseReais(parsed.data.fee || "0"),
@@ -184,7 +196,7 @@ export async function payAction(raw: unknown) {
       idempotencyKey: parsed.data.idempotencyKey,
     });
     refreshMoney();
-    return { ok: true as const, paymentId };
+    return { ok: true as const, paymentId, warning };
   } catch (error) {
     return fail(error);
   }
@@ -193,9 +205,9 @@ export async function payAction(raw: unknown) {
 export async function reverseAction(chargeId: string) {
   try {
     const { db, org } = await allow("pagamentos.estornar");
-    await reverseCharge(db, org.id, chargeId);
+    const { warning } = await reverseWithAsaas(db, org.id, chargeId);
     refreshMoney();
-    return { ok: true as const };
+    return { ok: true as const, warning };
   } catch (error) {
     return fail(error);
   }
@@ -271,59 +283,6 @@ export async function endSubscriptionAction(saleId: string) {
   }
 }
 
-const environments = {
-  demonstracao: "Demo",
-  sandbox: "Sandbox",
-  producao: "Produção",
-} as const;
-
-export async function asaasAction(command: "connect" | "disconnect" | "sync" | "demonstracao" | "sandbox" | "producao") {
-  const { db, org } = await allow("empresa.gravar");
-  const now = new Date().toISOString();
-  if (command === "connect") {
-    await db.update(organizations).set({ asaasConnected: true, asaasEnvironment: "demonstracao", asaasSyncedAt: now }).where(eq(organizations.id, org.id));
-    await db.insert(integrationEvents).values({
-      id: crypto.randomUUID(),
-      organizationId: org.id,
-      happenedAt: now,
-      kind: "CONEXAO_SIMULADA",
-      status: "sucesso",
-      description: "Conta demonstrativa marcada como conectada. Nenhuma chave foi armazenada.",
-    });
-  } else if (command === "disconnect") {
-    await db.update(organizations).set({ asaasConnected: false }).where(eq(organizations.id, org.id));
-    await db.insert(integrationEvents).values({
-      id: crypto.randomUUID(),
-      organizationId: org.id,
-      happenedAt: now,
-      kind: "DESCONEXAO_SIMULADA",
-      status: "info",
-      description: "Simulação desconectada. Nenhuma cobrança foi enviada.",
-    });
-  } else if (command === "sync") {
-    await db.update(organizations).set({ asaasSyncedAt: now }).where(eq(organizations.id, org.id));
-    await db.insert(integrationEvents).values({
-      id: crypto.randomUUID(),
-      organizationId: org.id,
-      happenedAt: now,
-      kind: "SINCRONIZACAO_SIMULADA",
-      status: "sucesso",
-      description: "Sincronização simulada. Nenhuma cobrança saiu para o Asaas.",
-    });
-  } else {
-    await db.update(organizations).set({ asaasEnvironment: command }).where(eq(organizations.id, org.id));
-    await db.insert(integrationEvents).values({
-      id: crypto.randomUUID(),
-      organizationId: org.id,
-      happenedAt: now,
-      kind: "AMBIENTE_VISUAL",
-      status: "info",
-      description: `Ambiente visual alterado para ${environments[command]}. Nenhuma credencial foi pedida.`,
-    });
-  }
-  revalidatePath("/integracoes");
-}
-
 export async function resetDemoAction() {
   const { db, org, userName, publicDemo } = await allow("demo.resetar");
   if (!publicDemo) throw new DomainError("Só a demonstração pública pode ser restaurada.");
@@ -374,11 +333,79 @@ export async function companyAction(formData: FormData) {
 export async function receivingAction(formData: FormData) {
   try {
     const { db, org } = await allow("empresa.gravar");
+    const mode = String(formData.get("mode") || "gestao");
+    if (mode !== "gestao" && mode !== "integrado") return { ok: false as const, error: "Escolha como você recebe." };
     const pixKey = String(formData.get("pixKey") || "").trim().slice(0, 140);
     const paymentInstructions = String(formData.get("instructions") || "").trim().slice(0, 600);
+    await setReceivingMode(db, org.id, mode);
     await db.update(organizations).set({ pixKey, paymentInstructions }).where(eq(organizations.id, org.id));
     revalidatePath("/", "layout");
     return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+// A chave do lojista só passa por aqui para descobrir a carteira. Nada dela é guardado nem devolvido.
+export async function connectAsaasAction(apiKey: string) {
+  try {
+    const { db, org } = await allow("empresa.gravar");
+    const { accountName } = await linkMerchantAccount(db, org.id, apiKey);
+    revalidatePath("/", "layout");
+    return { ok: true as const, accountName };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function disconnectAsaasAction() {
+  try {
+    const { db, org } = await allow("empresa.gravar");
+    await unlinkMerchantAccount(db, org.id);
+    revalidatePath("/", "layout");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function savePlatformAction(formData: FormData) {
+  try {
+    const { db, viewerEmail, userName } = await owner();
+    const input = parsePlatformForm({
+      environment: formData.get("environment"),
+      apiKey: formData.get("apiKey") ?? "",
+      webhookToken: formData.get("webhookToken") ?? "",
+      fee: formData.get("fee"),
+      planGestao: formData.get("planGestao"),
+      planIntegrado: formData.get("planIntegrado"),
+    });
+    await savePlatformSettings(db, input, viewerEmail || userName);
+    revalidatePath("/", "layout");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+// O token volta em texto puro só nesta resposta, para o dono colar no Asaas. Depois disso só existe cifrado.
+export async function generateWebhookTokenAction() {
+  try {
+    const { db, viewerEmail, userName } = await owner();
+    const token = await generateWebhookToken(db, viewerEmail || userName);
+    revalidatePath("/plataforma");
+    return { ok: true as const, token };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function testPlatformConnectionAction() {
+  try {
+    const { db } = await owner();
+    const result = await testPlatformConnection(db);
+    revalidatePath("/plataforma");
+    return { ok: true as const, accountName: result.accountName, environment: result.environment, walletTail: result.walletId.slice(-6) };
   } catch (error) {
     return fail(error);
   }

@@ -13,13 +13,13 @@ export const organizations = pgTable(
     phone: text("phone").notNull(),
     address: text("address").notNull(),
     timezone: text("timezone").notNull(),
-    asaasEnvironment: text("asaas_environment").notNull(),
-    asaasConnected: boolean("asaas_connected").notNull(),
-    asaasSyncedAt: text("asaas_synced_at"),
     lateFineBp: integer("late_fine_bp").notNull().default(200),
     lateInterestMonthlyBp: integer("late_interest_monthly_bp").notNull().default(100),
     pixKey: text("pix_key").notNull().default(""),
     paymentInstructions: text("payment_instructions").notNull().default(""),
+    receivingMode: text("receiving_mode").$type<"gestao" | "integrado">().notNull().default("gestao"),
+    asaasWalletId: text("asaas_wallet_id").notNull().default(""),
+    asaasAccountName: text("asaas_account_name").notNull().default(""),
     createdAt: text("created_at").notNull(),
   },
   (table) => [uniqueIndex("organizations_viewer_key").on(table.viewerKey)],
@@ -58,6 +58,7 @@ export const clients = pgTable(
     complement: text("complement").notNull(),
     notes: text("notes").notNull(),
     active: boolean("active").notNull(),
+    asaasCustomerId: text("asaas_customer_id"),
     createdAt: text("created_at").notNull(),
   },
   (table) => [index("clients_org_name").on(table.organizationId, table.name)],
@@ -191,11 +192,22 @@ export const charges = pgTable(
     method: text("method").notNull(),
     status: text("status").notNull(),
     paidOn: text("paid_on"),
+    asaasPaymentId: text("asaas_payment_id"),
+    asaasBillingType: text("asaas_billing_type"),
+    asaasInvoiceUrl: text("asaas_invoice_url"),
+    asaasBankSlipUrl: text("asaas_bank_slip_url"),
+    asaasIdentificationField: text("asaas_identification_field"),
+    asaasPixPayload: text("asaas_pix_payload"),
+    asaasPixImage: text("asaas_pix_image"),
+    asaasPixExpiresAt: text("asaas_pix_expires_at"),
+    asaasValueCents: integer("asaas_value_cents"),
+    asaasSyncedAt: text("asaas_synced_at"),
   },
   (table) => [
     index("charges_org_due").on(table.organizationId, table.dueOn),
     uniqueIndex("charges_org_code").on(table.organizationId, table.code),
     uniqueIndex("charges_recurrence_due").on(table.recurrenceId, table.dueOn).where(sql`recurrence_id is not null`),
+    uniqueIndex("charges_org_asaas_payment").on(table.organizationId, table.asaasPaymentId).where(sql`asaas_payment_id is not null`),
   ],
 );
 
@@ -238,15 +250,6 @@ export const dueChanges = pgTable("due_changes", {
   previousDue: text("previous_due").notNull(),
   nextDue: text("next_due").notNull(),
   createdAt: text("created_at").notNull(),
-});
-
-export const integrationEvents = pgTable("integration_events", {
-  id: text("id").primaryKey(),
-  organizationId: text("organization_id").notNull(),
-  happenedAt: text("happened_at").notNull(),
-  kind: text("kind").notNull(),
-  status: text("status").notNull(),
-  description: text("description").notNull(),
 });
 
 export const subscriptions = pgTable("subscriptions", {
@@ -326,4 +329,28 @@ export const errorEvents = pgTable("error_events", {
   scope: text("scope").notNull(),
   message: text("message").notNull(),
   createdAt: text("created_at").notNull(),
+});
+
+export const platformSettings = pgTable("platform_settings", {
+  id: text("id").primaryKey(),
+  asaasEnvironment: text("asaas_environment").$type<"sandbox" | "producao">().notNull().default("sandbox"),
+  asaasApiKeyEnc: text("asaas_api_key_enc").notNull().default(""),
+  asaasApiKeyHint: text("asaas_api_key_hint").notNull().default(""),
+  asaasWalletId: text("asaas_wallet_id").notNull().default(""),
+  asaasAccountName: text("asaas_account_name").notNull().default(""),
+  asaasWebhookTokenEnc: text("asaas_webhook_token_enc").notNull().default(""),
+  asaasWebhookTokenHint: text("asaas_webhook_token_hint").notNull().default(""),
+  platformFeeBp: integer("platform_fee_bp").notNull().default(150),
+  planGestaoCents: integer("plan_gestao_cents").notNull().default(4990),
+  planIntegradoCents: integer("plan_integrado_cents").notNull().default(3990),
+  updatedAt: text("updated_at").notNull().default(""),
+  updatedBy: text("updated_by").notNull().default(""),
+});
+
+export const asaasWebhookEvents = pgTable("asaas_webhook_events", {
+  id: text("id").primaryKey(),
+  event: text("event").notNull(),
+  paymentId: text("payment_id"),
+  receivedAt: text("received_at").notNull(),
+  processedAt: text("processed_at"),
 });

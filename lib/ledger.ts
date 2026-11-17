@@ -542,7 +542,9 @@ async function applyPayment(database: DB, organizationId: string, input: Payment
   return inserted.id;
 }
 
-export async function reverseCharge(db: DB, organizationId: string, chargeId: string) {
+// Sem paymentIds desfaz todos os recebimentos da cobrança. Com eles, só os indicados (um estorno do Asaas não deve levar junto o dinheiro recebido por outro meio).
+export async function reverseCharge(db: DB, organizationId: string, chargeId: string, paymentIds?: string[]) {
+  if (paymentIds?.length === 0) return;
   return db.transaction(async (tx) => {
     const database = tx as DB;
     const [charge] = await database
@@ -554,7 +556,7 @@ export async function reverseCharge(db: DB, organizationId: string, chargeId: st
     await database
       .update(payments)
       .set({ reversedAt: nowIso() })
-      .where(and(eq(payments.organizationId, organizationId), eq(payments.chargeId, chargeId), isNull(payments.reversedAt)));
+      .where(and(eq(payments.organizationId, organizationId), eq(payments.chargeId, chargeId), isNull(payments.reversedAt), paymentIds ? inArray(payments.id, paymentIds) : undefined));
     const [standing] = await database
       .select({ paid: sql<number>`coalesce(sum(${payments.amountCents}), 0)::int`, lastPaidOn: sql<string | null>`max(${payments.paidOn})` })
       .from(payments)

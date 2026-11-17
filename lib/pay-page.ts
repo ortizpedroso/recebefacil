@@ -1,8 +1,10 @@
 import { and, eq } from "drizzle-orm";
 import { todayIn } from "./dates";
 import type { DB } from "./db";
+import { documentKind } from "./documents";
 import { chargeBadge, chargeTitle, type Badge } from "./labels";
 import { lateCharges } from "./late";
+import { isIntegrated, loadPlatformSettings } from "./platform-settings";
 import { catalogImages, charges, clients, contracts, organizations, recurrences, saleItems } from "./schema";
 import { signToken, verifyToken } from "./secret";
 
@@ -16,6 +18,8 @@ export type PayPage = {
   openCents: number;
   feeCents: number;
   totalCents: number;
+  // Preenchido só quando o lojista recebe pelo Asaas e a plataforma está pronta: a página então oferece Pix, boleto e cartão.
+  online: { needsDocument: boolean } | null;
   items: { description: string; quantity: number; unitCents: number; photoId: string | null }[];
 };
 
@@ -57,6 +61,8 @@ export async function loadPayPage(db: DB, token: string): Promise<PayPage | null
     if (text) items = [{ description: text, quantity: 1, unitCents: charge.amountCents, photoId: null }];
   }
 
+  const online = state === "open" && isIntegrated(org, await loadPlatformSettings(db)) ? { needsDocument: documentKind(client.document) === null } : null;
+
   return {
     company: { name: org.tradeName, phone: org.phone, email: org.email, pixKey: org.pixKey, instructions: org.paymentInstructions },
     clientFirstName: client.name.trim().split(/\s+/)[0] ?? "",
@@ -67,6 +73,7 @@ export async function loadPayPage(db: DB, token: string): Promise<PayPage | null
     openCents,
     feeCents,
     totalCents: openCents + feeCents,
+    online,
     items,
   };
 }

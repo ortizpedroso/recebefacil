@@ -24,9 +24,6 @@ async function setup() {
     phone: "(92) 90000-0000",
     address: "Rua 1",
     timezone: "America/Manaus",
-    asaasEnvironment: "demonstracao",
-    asaasConnected: false,
-    asaasSyncedAt: null,
     createdAt: new Date().toISOString(),
   });
   const clientId = await insertClient(db, organizationId, {

@@ -16,6 +16,8 @@ export type Session = {
   profileEmail: string;
   showAvatar: boolean;
   role: Role;
+  viewerEmail: string;
+  simulatedViewer: boolean;
 };
 
 function profileFor(name: string, demo: boolean) {
@@ -45,12 +47,12 @@ export async function requireSession(): Promise<Session> {
     const org = await ensureOrganization(db, "public:demonstracao", "Visitante");
     if (!org) throw new Error("Organização indisponível.");
     const role = await actorRole(db, org.id, "camila@exemplo.com");
-    return { db, org, userName: "Visitante", publicDemo: true, role, ...profileFor("Visitante", true) };
+    return { db, org, userName: "Visitante", publicDemo: true, role, viewerEmail: "", simulatedViewer: false, ...profileFor("Visitante", true) };
   }
   const org = await ensureOrganization(db, `${identity.stage}:${identity.sub}`, identity.name || identity.email || "Conta", identity.email || undefined);
   if (!org) throw new Error("Organização indisponível.");
   const userName = identity.name || identity.email || "Conta";
   const actorEmail = identity.simulated ? "camila@exemplo.com" : identity.email || "";
   const role = await actorRole(db, org.id, actorEmail);
-  return { db, org, userName, publicDemo: false, role, ...profileFor(userName, identity.simulated) };
+  return { db, org, userName, publicDemo: false, role, viewerEmail: identity.email, simulatedViewer: identity.simulated, ...profileFor(userName, identity.simulated) };
 }

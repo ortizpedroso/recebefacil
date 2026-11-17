@@ -8,7 +8,6 @@ import {
   contacts,
   contracts,
   dueChanges,
-  integrationEvents,
   members,
   organizations,
   payments,
@@ -19,7 +18,7 @@ import {
 
 export async function loadBook(db: DB, organizationId: string, timeZone: string) {
   const today = todayIn(timeZone);
-  const [clientRows, catalog, saleRows, items, contractRows, recurrenceRows, chargeRows, paymentRows, contactRows, events, memberRows, dueRows] =
+  const [clientRows, catalog, saleRows, items, contractRows, recurrenceRows, chargeRows, paymentRows, contactRows, memberRows, dueRows] =
     await Promise.all([
       db.select().from(clients).where(eq(clients.organizationId, organizationId)),
       db.select().from(catalogItems).where(eq(catalogItems.organizationId, organizationId)),
@@ -30,7 +29,6 @@ export async function loadBook(db: DB, organizationId: string, timeZone: string)
       db.select().from(charges).where(eq(charges.organizationId, organizationId)),
       db.select().from(payments).where(eq(payments.organizationId, organizationId)),
       db.select().from(contacts).where(eq(contacts.organizationId, organizationId)),
-      db.select().from(integrationEvents).where(eq(integrationEvents.organizationId, organizationId)),
       db.select().from(members).where(eq(members.organizationId, organizationId)),
       db.select().from(dueChanges).where(eq(dueChanges.organizationId, organizationId)),
     ]);
@@ -45,7 +43,6 @@ export async function loadBook(db: DB, organizationId: string, timeZone: string)
     charges: chargeRows,
     payments: paymentRows,
     contacts: contactRows,
-    events,
     members: memberRows,
     dueChanges: dueRows,
   };

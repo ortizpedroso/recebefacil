@@ -24,9 +24,6 @@ test("uma venda de R$ 10.000 fecha entrada e quatro parcelas, e rejeita pagament
     phone: "(92) 90000-0000",
     address: "Rua 1",
     timezone: "America/Manaus",
-    asaasEnvironment: "demonstracao",
-    asaasConnected: false,
-    asaasSyncedAt: null,
     createdAt: new Date().toISOString(),
   });
   const clientId = await insertClient(db, organizationId, {
@@ -124,9 +121,6 @@ test("a recorrência gera o ciclo vencido, o cancelamento respeita o recebimento
     phone: "(92) 90000-0000",
     address: "Rua 1",
     timezone: "America/Manaus",
-    asaasEnvironment: "demonstracao",
-    asaasConnected: false,
-    asaasSyncedAt: null,
     createdAt: new Date().toISOString(),
   });
   await db.insert(organizations).values({
@@ -139,9 +133,6 @@ test("a recorrência gera o ciclo vencido, o cancelamento respeita o recebimento
     phone: "(92) 90000-0001",
     address: "Rua 2",
     timezone: "America/Manaus",
-    asaasEnvironment: "demonstracao",
-    asaasConnected: false,
-    asaasSyncedAt: null,
     createdAt: new Date().toISOString(),
   });
   const clientId = await insertClient(db, organizationId, {
