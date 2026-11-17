@@ -57,7 +57,6 @@ test("excluir venda sem pagamento apaga a venda e devolve o estoque", async () =
     category: "Imóveis",
     sku: "IMV-01",
     priceCents: cents(1_000_000),
-    billing: "pontual",
     stockQuantity: 5,
   });
   const saleId = await createSale(db, organizationId, {
@@ -99,5 +98,5 @@ test("excluir venda com pagamento é recusado", async () => {
   });
   const [charge] = await db.select().from(charges).where(eq(charges.saleId, saleId));
   await registerPayment(db, organizationId, { chargeId: charge.id, amountCents: cents(15_000), paidOn: "2026-06-01", method: "Pix", note: "" });
-  await assert.rejects(() => deleteSale(db, organizationId, saleId), /Estorne/);
+  await assert.rejects(() => deleteSale(db, organizationId, saleId), /Desfaça/);
 });

@@ -257,7 +257,7 @@ test("vencimento de cobrança paga não muda", async () => {
 
 test("cancelar a venda devolve o estoque uma vez só", async () => {
   const { db, organizationId, sale } = await setup();
-  const itemId = await insertCatalog(db, organizationId, { kind: "produto", name: "Peça", description: "", category: "Peças", sku: "P1", priceCents: cents(1_000), billing: "pontual", stockQuantity: 5 });
+  const itemId = await insertCatalog(db, organizationId, { kind: "produto", name: "Peça", description: "", category: "Peças", sku: "P1", priceCents: cents(1_000), stockQuantity: 5 });
   const saleId = await createSale(db, organizationId, sale({ items: [{ catalogItemId: itemId, description: "Peça", kind: "produto", quantity: 2, unitCents: cents(1_000) }] }));
   const stock = async () => (await db.select().from(catalogItems).where(eq(catalogItems.id, itemId)))[0].stockQuantity;
   assert.equal(await stock(), 3);

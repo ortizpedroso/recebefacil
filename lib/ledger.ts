@@ -1,39 +1,18 @@
 import { and, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
+import { insertClient, type ClientInput } from "./clients";
 import type { Periodicity } from "./dates";
 import { addPeriod, periodIndexOnOrAfter } from "./dates";
 import type { DB } from "./db";
-import { cents, MAX_INSTALLMENTS, type Cents } from "./money";
-import { buildSchedule, MAX_ADJUST_BP, MAX_FINANCE_INTEREST_BP, scheduleTotal, type ScheduleRow } from "./schedule";
+import { DomainError } from "./errors";
+import { cents, type Cents } from "./money";
+import { planSale, type ItemInput, type SaleInput, type SalePlan } from "./plan";
+import { buildSchedule, scheduleTotal, type ScheduleRow } from "./schedule";
 import { catalogItems, charges, clients, contracts, dueChanges, fiscalDocuments, payments, recurrences, saleItems, sales, stockMoves } from "./schema";
 import { isOpen, settleStatus } from "./status";
 
-export class DomainError extends Error {}
-
-type ItemInput = {
-  catalogItemId: string | null;
-  description: string;
-  kind: "produto" | "servico";
-  quantity: number;
-  unitCents: Cents;
-};
-
-export type SaleInput = {
-  clientId: string;
-  soldOn: string;
-  discountCents: Cents;
-  notes: string;
-  mode: "avista" | "parcelado" | "recorrente";
-  entryCents: Cents;
-  installmentCount: number;
-  firstDue: string;
-  periodicity: Periodicity;
-  interestMonthlyBp?: number;
-  adjustYearlyBp?: number;
-  method: string;
-  makeContract: boolean;
-  items: ItemInput[];
-};
+export { DomainError };
+export type { SaleInput };
 
 function id() {
   return randomUUID();
@@ -68,10 +47,13 @@ function recurrenceLabel(periodicity: Periodicity) {
   return RECURRENCE_LABELS[periodicity] ?? "Cobrança recorrente";
 }
 
-async function validateSaleReferences(db: DB, organizationId: string, input: SaleInput) {
-  const [client] = await db.select().from(clients).where(and(eq(clients.organizationId, organizationId), eq(clients.id, input.clientId)));
+async function validateClient(db: DB, organizationId: string, clientId: string) {
+  const [client] = await db.select().from(clients).where(and(eq(clients.organizationId, organizationId), eq(clients.id, clientId)));
   if (!client) throw new DomainError("Cliente não encontrado.");
-  for (const item of input.items) {
+}
+
+async function validateItems(db: DB, organizationId: string, items: ItemInput[]) {
+  for (const item of items) {
     if (!item.catalogItemId) continue;
     const [catalog] = await db
       .select()
@@ -79,58 +61,6 @@ async function validateSaleReferences(db: DB, organizationId: string, input: Sal
       .where(and(eq(catalogItems.organizationId, organizationId), eq(catalogItems.id, item.catalogItemId)));
     if (!catalog) throw new DomainError("Item do catálogo não encontrado.");
   }
-}
-
-type SalePlan = {
-  total: Cents;
-  entry: Cents;
-  count: number;
-  interestBp: number;
-  adjustBp: number;
-  periodicity: Periodicity | null;
-  rows: ScheduleRow[];
-};
-
-function planSale(input: SaleInput): SalePlan {
-  const itemsTotal = input.items.reduce((sum, item) => sum + item.quantity * item.unitCents, 0);
-  if (itemsTotal <= input.discountCents) throw new DomainError("O desconto zera a venda.");
-  const total = cents(itemsTotal - input.discountCents);
-  if (input.mode === "avista") {
-    const rows = [{ number: 1, label: "À vista", dueOn: input.soldOn, amountCents: total }];
-    return { total, entry: cents(0), count: 1, interestBp: 0, adjustBp: 0, periodicity: null, rows };
-  }
-  if (input.mode === "recorrente") {
-    return { total, entry: cents(0), count: 1, interestBp: 0, adjustBp: 0, periodicity: input.periodicity, rows: [] };
-  }
-  const entry = input.entryCents;
-  if (entry > total) throw new DomainError("A entrada passa do total.");
-  if (entry === total) throw new DomainError("A entrada quita a venda. Use à vista.");
-  const count = input.installmentCount;
-  if (!Number.isInteger(count) || count < 1 || count > MAX_INSTALLMENTS) {
-    throw new DomainError(`A quantidade de parcelas deve ficar entre 1 e ${MAX_INSTALLMENTS}.`);
-  }
-  const interestBp = input.interestMonthlyBp ?? 0;
-  const adjustBp = input.adjustYearlyBp ?? 0;
-  if (!Number.isInteger(interestBp) || interestBp < 0 || interestBp > MAX_FINANCE_INTEREST_BP) {
-    throw new DomainError("Os juros do financiamento vão de 0% a 10% ao mês.");
-  }
-  if (!Number.isInteger(adjustBp) || adjustBp < 0 || adjustBp > MAX_ADJUST_BP) {
-    throw new DomainError("O reajuste anual vai de 0% a 20%.");
-  }
-  const financed = cents(total - entry);
-  if (financed < count) throw new DomainError("O saldo não cobre um centavo por parcela.");
-  const rows = buildSchedule({
-    financedCents: financed,
-    entryCents: entry,
-    count,
-    firstDue: input.firstDue,
-    soldOn: input.soldOn,
-    periodicity: input.periodicity,
-    interestMonthlyBp: interestBp,
-    adjustYearlyBp: adjustBp,
-  });
-  if (rows.some((row) => row.amountCents <= 0)) throw new DomainError("O saldo é pequeno demais para essa quantidade de parcelas.");
-  return { total, entry, count, interestBp, adjustBp, periodicity: input.periodicity, rows };
 }
 
 type ChargeOrigin = { saleId: string | null; contractId: string | null; recurrenceId: string | null };
@@ -189,6 +119,22 @@ async function restoreStock(tx: DB, organizationId: string, saleId: string, reas
   }
 }
 
+function contractTerms(mode: SaleInput["mode"], periodicity: Periodicity, count: number) {
+  if (mode === "recorrente") return `Recorrência ${periodicity}`;
+  return mode === "parcelado" ? `Entrada e ${count} parcelas` : "Pagamento à vista";
+}
+
+async function insertContract(
+  tx: DB,
+  organizationId: string,
+  input: { clientId: string; saleId: string | null; description: string; totalCents: Cents; startsOn: string; endsOn: string | null; terms: string },
+) {
+  const contractId = id();
+  const [number] = await nextCodes(tx, organizationId, "CTR", "contracts");
+  await tx.insert(contracts).values({ id: contractId, organizationId, number, status: "ativo", ...input });
+  return contractId;
+}
+
 async function writeSaleChildren(tx: DB, organizationId: string, saleId: string, input: SaleInput, plan: SalePlan) {
   for (const item of input.items) {
     await tx.insert(saleItems).values({
@@ -205,24 +151,17 @@ async function writeSaleChildren(tx: DB, organizationId: string, saleId: string,
     await consumeStock(tx, organizationId, saleId, item);
   }
 
-  let contractId: string | null = null;
-  if (input.makeContract) {
-    contractId = id();
-    const [number] = await nextCodes(tx, organizationId, "CTR", "contracts");
-    await tx.insert(contracts).values({
-      id: contractId,
-      organizationId,
-      number,
-      clientId: input.clientId,
-      saleId,
-      description: input.items.map((item) => item.description).join(", "),
-      totalCents: plan.total,
-      startsOn: input.soldOn,
-      endsOn: input.mode === "parcelado" ? addPeriod(input.firstDue, input.periodicity, plan.count - 1) : null,
-      status: "ativo",
-      terms: input.mode === "recorrente" ? `Recorrência ${input.periodicity}` : input.mode === "parcelado" ? `Entrada e ${plan.count} parcelas` : "Pagamento à vista",
-    });
-  }
+  const contractId = input.makeContract
+    ? await insertContract(tx, organizationId, {
+        clientId: input.clientId,
+        saleId,
+        description: input.items.map((item) => item.description).join(", "),
+        totalCents: plan.total,
+        startsOn: input.soldOn,
+        endsOn: input.mode === "parcelado" ? addPeriod(input.firstDue, input.periodicity, plan.count - 1) : null,
+        terms: contractTerms(input.mode, input.periodicity, plan.count),
+      })
+    : null;
 
   const origin = { saleId, contractId, recurrenceId: null };
   if (input.mode === "recorrente") {
@@ -273,18 +212,23 @@ function salePlanColumns(plan: SalePlan) {
   };
 }
 
-export async function createSale(db: DB, organizationId: string, input: SaleInput) {
-  await validateSaleReferences(db, organizationId, input);
+export async function createSale(db: DB, organizationId: string, input: SaleInput, newClient?: ClientInput) {
   const plan = planSale(input);
+  if (input.paidNow && input.mode !== "avista") throw new DomainError("Só venda à vista pode nascer recebida.");
+  if (!newClient) await validateClient(db, organizationId, input.clientId);
+  await validateItems(db, organizationId, input.items);
+  // Cliente novo, venda e recebimento entram juntos ou nenhum entra.
   return db.transaction(async (tx) => {
     const database = tx as DB;
+    const clientId = newClient ? await insertClient(database, organizationId, newClient) : input.clientId;
+    const saleInput = { ...input, clientId };
     const saleId = id();
     const [code] = await nextCodes(database, organizationId, "VND", "sales");
     await database.insert(sales).values({
       id: saleId,
       organizationId,
       code,
-      clientId: input.clientId,
+      clientId,
       soldOn: input.soldOn,
       discountCents: input.discountCents,
       totalCents: plan.total,
@@ -294,7 +238,19 @@ export async function createSale(db: DB, organizationId: string, input: SaleInpu
       ...salePlanColumns(plan),
       createdAt: nowIso(),
     });
-    await writeSaleChildren(database, organizationId, saleId, input, plan);
+    await writeSaleChildren(database, organizationId, saleId, saleInput, plan);
+    if (input.paidNow) {
+      const [charge] = await database.select().from(charges).where(and(eq(charges.organizationId, organizationId), eq(charges.saleId, saleId)));
+      await applyPayment(database, organizationId, {
+        chargeId: charge.id,
+        amountCents: plan.total,
+        feeCents: cents(0),
+        paidOn: input.paidNow.paidOn,
+        method: input.paidNow.method,
+        note: "",
+        idempotencyKey: `venda:${saleId}`,
+      });
+    }
     return saleId;
   });
 }
@@ -328,13 +284,14 @@ async function deleteRecurrencesOf(tx: DB, organizationId: string, chargeRows: {
 }
 
 export async function updateSale(db: DB, organizationId: string, saleId: string, input: SaleInput) {
-  await validateSaleReferences(db, organizationId, input);
   const plan = planSale(input);
+  await validateClient(db, organizationId, input.clientId);
+  await validateItems(db, organizationId, input.items);
   return db.transaction(async (tx) => {
     const database = tx as DB;
     const { sale, rows } = await lockSaleCharges(database, organizationId, saleId);
     if (sale.status === "cancelada") throw new DomainError("Venda cancelada não pode ser editada.");
-    if (rows.some((charge) => charge.paidCents > 0)) throw new DomainError("Estorne os recebimentos antes de editar a venda.");
+    if (rows.some((charge) => charge.paidCents > 0)) throw new DomainError("Desfaça os recebimentos antes de editar a venda.");
     await restoreStock(database, organizationId, saleId, "edicao");
     await database.delete(saleItems).where(and(eq(saleItems.organizationId, organizationId), eq(saleItems.saleId, saleId)));
     await deleteChargesOf(database, organizationId, rows.map((charge) => charge.id));
@@ -522,68 +479,67 @@ async function refreshSale(tx: DB, organizationId: string, saleId: string) {
   await tx.update(sales).set({ status: saleStatus(expected, paid, false) }).where(eq(sales.id, saleId));
 }
 
-export async function registerPayment(
-  db: DB,
-  organizationId: string,
-  input: { chargeId: string; amountCents: Cents; feeCents?: Cents; paidOn: string; method: string; note: string; idempotencyKey?: string },
-) {
+type PaymentInput = { chargeId: string; amountCents: Cents; feeCents?: Cents; paidOn: string; method: string; note: string; idempotencyKey?: string };
+
+export async function registerPayment(db: DB, organizationId: string, input: PaymentInput) {
+  return db.transaction((tx) => applyPayment(tx as DB, organizationId, input));
+}
+
+async function applyPayment(database: DB, organizationId: string, input: PaymentInput) {
   if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) throw new DomainError("O valor precisa ser maior que zero.");
   const feeCents = input.feeCents ?? 0;
   if (!Number.isInteger(feeCents) || feeCents < 0) throw new DomainError("Multa e juros não podem ser negativos.");
-  return db.transaction(async (tx) => {
-    const database = tx as DB;
-    const [charge] = await database
+  const [charge] = await database
+    .select()
+    .from(charges)
+    .where(and(eq(charges.organizationId, organizationId), eq(charges.id, input.chargeId)));
+  if (!charge) throw new DomainError("Cobrança não encontrada.");
+  const [inserted] = await database
+    .insert(payments)
+    .values({
+      id: id(),
+      organizationId,
+      chargeId: charge.id,
+      amountCents: input.amountCents,
+      feeCents,
+      paidOn: input.paidOn,
+      method: input.method,
+      note: input.note,
+      idempotencyKey: input.idempotencyKey ?? null,
+      reversedAt: null,
+    })
+    .onConflictDoNothing({ target: [payments.organizationId, payments.idempotencyKey] })
+    .returning({ id: payments.id });
+  if (!inserted) {
+    const [existing] = await database
       .select()
-      .from(charges)
-      .where(and(eq(charges.organizationId, organizationId), eq(charges.id, input.chargeId)));
-    if (!charge) throw new DomainError("Cobrança não encontrada.");
-    const [inserted] = await database
-      .insert(payments)
-      .values({
-        id: id(),
-        organizationId,
-        chargeId: charge.id,
-        amountCents: input.amountCents,
-        feeCents,
-        paidOn: input.paidOn,
-        method: input.method,
-        note: input.note,
-        idempotencyKey: input.idempotencyKey ?? null,
-        reversedAt: null,
-      })
-      .onConflictDoNothing({ target: [payments.organizationId, payments.idempotencyKey] })
-      .returning({ id: payments.id });
-    if (!inserted) {
-      const [existing] = await database
-        .select()
-        .from(payments)
-        .where(and(eq(payments.organizationId, organizationId), eq(payments.idempotencyKey, input.idempotencyKey ?? "")));
-      if (!existing || existing.chargeId !== charge.id || existing.amountCents !== input.amountCents) {
-        throw new DomainError("A mesma chave veio com outro valor.");
-      }
-      return existing.id;
+      .from(payments)
+      .where(and(eq(payments.organizationId, organizationId), eq(payments.idempotencyKey, input.idempotencyKey ?? "")));
+    if (!existing || existing.chargeId !== charge.id || existing.amountCents !== input.amountCents) {
+      throw new DomainError("A mesma chave veio com outro valor.");
     }
-    // Uma instrução só decide saldo e bloqueio, então dois pagamentos simultâneos nunca passam do valor.
-    const [updated] = await database
-      .update(charges)
-      .set({ paidCents: sql`${charges.paidCents} + ${input.amountCents}`, paidOn: input.paidOn })
-      .where(
-        and(
-          eq(charges.organizationId, organizationId),
-          eq(charges.id, charge.id),
-          ne(charges.status, "cancelada"),
-          sql`${charges.paidCents} + ${input.amountCents} <= ${charges.amountCents}`,
-        ),
-      )
-      .returning();
-    if (!updated) {
-      const [fresh] = await database.select().from(charges).where(eq(charges.id, charge.id));
-      throw new DomainError(fresh?.status === "cancelada" ? "Esta cobrança não aceita pagamento." : "O pagamento passa do saldo.");
-    }
-    await database.update(charges).set({ status: settleStatus(updated) }).where(eq(charges.id, updated.id));
-    if (updated.saleId) await refreshSale(database, organizationId, updated.saleId);
-    return inserted.id;
-  });
+    return existing.id;
+  }
+  // Uma instrução só decide saldo e bloqueio, então dois pagamentos simultâneos nunca passam do valor.
+  const [updated] = await database
+    .update(charges)
+    .set({ paidCents: sql`${charges.paidCents} + ${input.amountCents}`, paidOn: input.paidOn })
+    .where(
+      and(
+        eq(charges.organizationId, organizationId),
+        eq(charges.id, charge.id),
+        ne(charges.status, "cancelada"),
+        sql`${charges.paidCents} + ${input.amountCents} <= ${charges.amountCents}`,
+      ),
+    )
+    .returning();
+  if (!updated) {
+    const [fresh] = await database.select().from(charges).where(eq(charges.id, charge.id));
+    throw new DomainError(fresh?.status === "cancelada" ? "Esta cobrança não aceita pagamento." : "O pagamento passa do saldo.");
+  }
+  await database.update(charges).set({ status: settleStatus(updated) }).where(eq(charges.id, updated.id));
+  if (updated.saleId) await refreshSale(database, organizationId, updated.saleId);
+  return inserted.id;
 }
 
 export async function reverseCharge(db: DB, organizationId: string, chargeId: string) {
@@ -649,7 +605,7 @@ export async function cancelSale(db: DB, organizationId: string, saleId: string)
     const database = tx as DB;
     const { sale, rows } = await lockSaleCharges(database, organizationId, saleId);
     if (sale.status === "cancelada") return;
-    if (rows.some((row) => row.paidCents > 0)) throw new DomainError("Estorne os recebimentos antes de cancelar a venda.");
+    if (rows.some((row) => row.paidCents > 0)) throw new DomainError("Desfaça os recebimentos antes de cancelar a venda.");
     await restoreStock(database, organizationId, saleId, "cancelamento");
     await database.update(sales).set({ status: "cancelada" }).where(eq(sales.id, saleId));
     await database.update(charges).set({ status: "cancelada" }).where(and(eq(charges.organizationId, organizationId), eq(charges.saleId, saleId)));
@@ -661,12 +617,52 @@ export async function cancelSale(db: DB, organizationId: string, saleId: string)
   });
 }
 
+export async function createContractForSale(db: DB, organizationId: string, saleId: string) {
+  return db.transaction(async (tx) => {
+    const database = tx as DB;
+    const { sale, rows } = await lockSaleCharges(database, organizationId, saleId);
+    if (sale.status === "cancelada") throw new DomainError("Venda cancelada não tem contrato.");
+    const [existing] = await database.select().from(contracts).where(and(eq(contracts.organizationId, organizationId), eq(contracts.saleId, saleId)));
+    if (existing) return existing.id;
+    const items = await database.select().from(saleItems).where(and(eq(saleItems.organizationId, organizationId), eq(saleItems.saleId, saleId)));
+    const lastDue = rows.filter((row) => row.status !== "cancelada").map((row) => row.dueOn).sort().at(-1) ?? null;
+    return insertContract(database, organizationId, {
+      clientId: sale.clientId,
+      saleId,
+      description: items.map((item) => item.description).join(", "),
+      totalCents: cents(sale.totalCents),
+      startsOn: sale.soldOn,
+      endsOn: sale.mode === "parcelado" ? lastDue : null,
+      terms: contractTerms(sale.mode as SaleInput["mode"], (sale.periodicity ?? "mensal") as Periodicity, sale.installmentCount ?? 1),
+    });
+  });
+}
+
+// Para de gerar cobranças novas e cancela as que ainda nem venceram e não têm pagamento. O que já foi cobrado continua valendo.
+export async function endSubscription(db: DB, organizationId: string, saleId: string, today: string) {
+  await db.transaction(async (tx) => {
+    const database = tx as DB;
+    const { sale, rows } = await lockSaleCharges(database, organizationId, saleId);
+    if (sale.mode !== "recorrente") throw new DomainError("Só mensalidade pode ser encerrada.");
+    if (sale.status === "cancelada") throw new DomainError("Venda cancelada.");
+    const recurrenceIds = [...new Set(rows.map((row) => row.recurrenceId).filter((value): value is string => Boolean(value)))];
+    if (recurrenceIds.length > 0) {
+      await database.update(recurrences).set({ status: "cancelada" }).where(and(eq(recurrences.organizationId, organizationId), inArray(recurrences.id, recurrenceIds)));
+    }
+    const future = rows.filter((row) => isOpen(row) && row.paidCents === 0 && row.dueOn > today).map((row) => row.id);
+    if (future.length > 0) {
+      await database.update(charges).set({ status: "cancelada" }).where(and(eq(charges.organizationId, organizationId), inArray(charges.id, future)));
+    }
+    await refreshSale(database, organizationId, saleId);
+  });
+}
+
 export async function deleteSale(db: DB, organizationId: string, saleId: string) {
   return db.transaction(async (tx) => {
     const database = tx as DB;
     const { sale, rows } = await lockSaleCharges(database, organizationId, saleId);
     if (sale.status === "cancelada") throw new DomainError("Venda cancelada não pode ser excluída.");
-    if (rows.some((charge) => charge.paidCents > 0)) throw new DomainError("Estorne os recebimentos antes de excluir a venda.");
+    if (rows.some((charge) => charge.paidCents > 0)) throw new DomainError("Desfaça os recebimentos antes de excluir a venda.");
     await restoreStock(database, organizationId, saleId, "exclusao");
     await deleteChargesOf(database, organizationId, rows.map((charge) => charge.id));
     await database.delete(stockMoves).where(and(eq(stockMoves.organizationId, organizationId), eq(stockMoves.saleId, saleId)));

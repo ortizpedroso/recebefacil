@@ -270,6 +270,18 @@ alter table charges add column if not exists label text;
 alter table payments add column if not exists fee_cents integer not null default 0 check (fee_cents >= 0);
 alter table due_changes add column if not exists charge_id text references charges(id);
 alter table due_changes alter column installment_id drop not null;
+alter table organizations add column if not exists pix_key text not null default '';
+alter table organizations add column if not exists payment_instructions text not null default '';
+alter table catalog_items alter column billing set default 'pontual';
+create table if not exists catalog_images (
+  id text primary key,
+  organization_id text not null references organizations(id),
+  catalog_item_id text not null references catalog_items(id),
+  mime text not null,
+  bytes text not null,
+  created_at text not null
+);
+create unique index if not exists catalog_images_item on catalog_images (catalog_item_id);
 `;
 
 // Blocos com ponto e vírgula interno rodam inteiros, na ordem, depois do SCHEMA_SQL.
@@ -304,4 +316,8 @@ export const MIGRATION_STATEMENTS = [
   "create unique index if not exists contracts_org_number on contracts (organization_id, number)",
   bestEffortUnique("create unique index if not exists fiscal_documents_org_series_number on fiscal_documents (organization_id, series, number)"),
   bestEffortUnique("create unique index if not exists charges_recurrence_due on charges (recurrence_id, due_on) where recurrence_id is not null"),
+  // "Mensalidade" virou um tipo do catálogo. A coluna billing fica só como espelho do tipo.
+  `update catalog_items set kind = 'mensalidade' where billing = 'recorrente' and kind <> 'mensalidade'`,
+  `update catalog_items set billing = 'recorrente' where kind = 'mensalidade' and billing <> 'recorrente'`,
+  `update catalog_items set billing = 'pontual' where kind <> 'mensalidade' and billing <> 'pontual'`,
 ];

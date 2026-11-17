@@ -1,78 +1,67 @@
-import { desc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { Shell, type ShellAlert, type ShellSearch } from "@/components/shell";
-import { formatDateBR, todayIn } from "@/lib/dates";
 import { money } from "@/components/ui";
+import { formatDateBR, todayIn } from "@/lib/dates";
 import { advanceRecurrences } from "@/lib/ledger";
-import { clientName, displayStatus, loadBook } from "@/lib/read";
-import { errorEvents } from "@/lib/schema";
+import { alertRows } from "@/lib/receivables";
+import { clients, sales } from "@/lib/schema";
 import { requireSession } from "@/lib/session";
+import { normalize } from "@/lib/text";
 
 export default async function PainelLayout({ children }: { children: React.ReactNode }) {
   const session = await requireSession();
-  await advanceRecurrences(session.db, session.org.id, todayIn(session.org.timezone));
-  const book = await loadBook(session.db, session.org.id, session.org.timezone);
+  const { db, org } = session;
+  const today = todayIn(org.timezone);
+  await advanceRecurrences(db, org.id, today);
+  const [people, saleRows, alertData] = await Promise.all([
+    db.select({ id: clients.id, name: clients.name, document: clients.document, phone: clients.whatsapp }).from(clients).where(eq(clients.organizationId, org.id)),
+    db.select({ id: sales.id, code: sales.code, clientId: sales.clientId, total: sales.totalCents }).from(sales).where(eq(sales.organizationId, org.id)),
+    alertRows(db, org.id, today),
+  ]);
+  const names = new Map(people.map((client) => [client.id, client.name]));
   const search: ShellSearch[] = [
-    ...book.clients.map((client) => ({
+    ...people.map((client) => ({
       kind: "Cliente",
       title: client.name,
-      subtitle: client.document,
+      subtitle: client.phone || client.document || "Sem telefone",
       href: `/clientes/${client.id}`,
-      haystack: `${client.name} ${client.document}`.toLowerCase(),
+      haystack: normalize(`${client.name} ${client.document} ${client.phone}`),
     })),
-    ...book.sales.map((sale) => ({
+    ...saleRows.map((sale) => ({
       kind: "Venda",
-      title: sale.code,
-      subtitle: `${clientName(book, sale.clientId)} · ${money(sale.totalCents)}`,
-      href: "/vendas",
-      haystack: `${sale.code} ${clientName(book, sale.clientId)}`.toLowerCase(),
-    })),
-    ...book.charges.map((charge) => ({
-      kind: "Cobrança",
-      title: charge.code,
-      subtitle: `${clientName(book, charge.clientId)} · ${money(charge.amountCents)}`,
-      href: "/cobrancas",
-      haystack: `${charge.code} ${clientName(book, charge.clientId)}`.toLowerCase(),
+      title: `${names.get(sale.clientId) ?? "Cliente"} · ${sale.code}`,
+      subtitle: money(sale.total),
+      href: `/vendas/${sale.id}`,
+      haystack: normalize(`${sale.code} ${names.get(sale.clientId) ?? ""}`),
     })),
   ];
-  const late = book.charges.filter((charge) => displayStatus(charge.status, charge.dueOn, book.today, charge.paidCents, charge.amountCents) === "vencida");
-  const soon = book.charges
-    .filter((charge) => displayStatus(charge.status, charge.dueOn, book.today, charge.paidCents, charge.amountCents) === "pendente")
-    .slice(0, 3);
-  const recentErrors = await session.db.select().from(errorEvents).where(eq(errorEvents.organizationId, session.org.id)).orderBy(desc(errorEvents.createdAt)).limit(5);
   const alerts: ShellAlert[] = [
-    ...recentErrors.map((event) => ({
-      id: event.id,
-      tone: "erro" as const,
-      label: "Erro registrado",
-      amount: event.scope,
-      detail: event.message,
-      href: "/ajuda",
-    })),
-    ...late.map((charge) => ({
-      id: charge.id,
+    ...alertData.late.map((row) => ({
+      id: row.id,
       tone: "late" as const,
-      label: "Cobrança vencida",
-      amount: money(charge.amountCents - charge.paidCents),
-      detail: `${clientName(book, charge.clientId)} · Venc. ${formatDateBR(charge.dueOn)}`,
-      href: "/inadimplencia",
+      label: `Atrasada ${row.late} ${row.late === 1 ? "dia" : "dias"}`,
+      amount: money(row.openCents),
+      detail: `${row.clientName} · venceu ${formatDateBR(row.dueOn)}`,
+      href: "/receber?filtro=atrasadas",
     })),
-    ...soon.map((charge) => ({
-      id: charge.id,
+    ...alertData.soon.map((row) => ({
+      id: row.id,
       tone: "soon" as const,
-      label: "Vencimento próximo",
-      amount: money(charge.amountCents - charge.paidCents),
-      detail: `${clientName(book, charge.clientId)} · Venc. ${formatDateBR(charge.dueOn)}`,
-      href: "/cobrancas",
+      label: "Vence logo",
+      amount: money(row.openCents),
+      detail: `${row.clientName} · vence ${formatDateBR(row.dueOn)}`,
+      href: "/receber?filtro=mes",
     })),
   ];
   return (
     <Shell
-      company={session.org.tradeName}
+      company={org.tradeName}
       profileName={session.profileName}
       profileRole={session.profileRole}
       profileEmail={session.profileEmail}
       showAvatar={session.showAvatar}
-      lateCount={late.length}
+      publicDemo={session.publicDemo}
+      lateCount={alertData.lateCount}
       search={search}
       alerts={alerts}
     >

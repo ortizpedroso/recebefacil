@@ -72,7 +72,7 @@ test("no banco migrado a cobrança antiga recebe pagamento e a venda antiga pode
   await registerPayment(db, "org", { chargeId: "c1", amountCents: cents(1000), paidOn: "2026-01-10", method: "Pix", note: "" });
   const [paid] = await db.select().from(schema.charges).where(eq(schema.charges.id, "c1"));
   assert.equal(paid.status, "paga");
-  await assert.rejects(() => deleteSale(db, "org", "sale"), /Estorne/);
+  await assert.rejects(() => deleteSale(db, "org", "sale"), /Desfaça/);
 
   const { reverseCharge } = await import("./ledger");
   await reverseCharge(db, "org", "c1");

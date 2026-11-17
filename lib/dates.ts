@@ -74,7 +74,8 @@ export function shiftDays(iso: string, days: number): string {
 
 export function whatsAppHref(phone: string, message: string): string {
   const digits = phone.replace(/\D/g, "");
-  const full = digits.startsWith("55") ? digits : `55${digits}`;
+  // DDD 55 (Rio Grande do Sul) também começa com 55: só um número com mais de 11 dígitos já traz o código do país.
+  const full = digits.length > 11 && digits.startsWith("55") ? digits : `55${digits}`;
   return `https://wa.me/${full}?text=${encodeURIComponent(message)}`;
 }
 
@@ -82,4 +83,22 @@ export function daysLate(dueOn: string, today: string): number {
   const due = Date.parse(`${dueOn}T00:00:00Z`);
   const now = Date.parse(`${today}T00:00:00Z`);
   return Math.floor((now - due) / 86_400_000);
+}
+
+export function monthStart(today: string): string {
+  return `${today.slice(0, 7)}-01`;
+}
+
+export function nextMonthStart(today: string): string {
+  return addPeriod(monthStart(today), "mensal", 1);
+}
+
+const MONTHS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+
+export function monthName(iso: string): string {
+  return MONTHS[Number(iso.slice(5, 7)) - 1] ?? "";
+}
+
+export function formatDayMonth(iso: string): string {
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
 }

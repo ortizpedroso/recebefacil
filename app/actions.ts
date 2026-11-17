@@ -4,19 +4,23 @@ import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { can, isRole, type Permission } from "../lib/access";
 import { isPlan, payPlatformInvoice, subscribe } from "../lib/billing";
-import { todayIn, type Periodicity } from "../lib/dates";
-import { isValidCnpj } from "../lib/documents";
-import { DomainError, cancelSale, changeDueDate, createCharge, createContract, createRecurrence, createSale, deleteSale, registerPayment, reverseCharge, setContractStatus, setRecurrenceStatus, updateContract, updateRecurrence, updateSale, type SaleInput } from "../lib/ledger";
+import { todayIn } from "../lib/dates";
+import { documentKind, isValidCnpj } from "../lib/documents";
+import { DomainError } from "../lib/errors";
+import { cancelSale, changeDueDate, createCharge, createContractForSale, createSale, deleteSale, endSubscription, registerPayment, reverseCharge, updateSale, type SaleInput } from "../lib/ledger";
 import { lateSettingsError } from "../lib/late";
 import { cents, parsePercentBp, parseReais } from "../lib/money";
+import { parsePhoto, saveCatalogPhoto } from "../lib/photos";
 import { requireSession } from "../lib/session";
-import { catalogSchema, clientSchema, contactSchema, dueSchema, paymentSchema, saleSchema } from "../lib/schemas";
+import { catalogSchema, chargeSchema, clientSchema, dueSchema, paymentSchema, saleSchema, toClientInput } from "../lib/schemas";
 import type { z } from "zod";
-import { campaignRecipients, campaigns, catalogItems, clients, contacts, fiscalDocuments, integrationEvents, members, organizations, sales, stockMoves, supportTickets } from "../lib/schema";
+import { campaignRecipients, campaigns, catalogItems, clients, fiscalDocuments, integrationEvents, members, organizations, sales, supportTickets } from "../lib/schema";
 import { insertCatalog, insertClient, resetOrganization, updateCatalog, updateClient } from "../lib/tenant";
+import { isBrazilZone } from "../lib/zones";
 
 function fail(error: unknown) {
   if (error instanceof DomainError) return { ok: false as const, error: error.message };
+  console.error(error);
   return { ok: false as const, error: "Não foi possível concluir. Revise os dados." };
 }
 
@@ -26,11 +30,26 @@ async function allow(permission: Permission) {
   return session;
 }
 
-function parseStock(kind: "produto" | "servico", stock: string) {
-  if (kind === "servico" || stock.trim() === "") return null;
+// Dinheiro mudou de lugar: o menu, o Início e as listas leem isso.
+function refreshMoney() {
+  revalidatePath("/", "layout");
+}
+
+function parseStock(kind: string, stock: string) {
+  if (kind !== "produto" || stock.trim() === "") return null;
   const quantity = Number(stock);
   if (!Number.isInteger(quantity) || quantity < 0) throw new DomainError("Informe o estoque em unidades inteiras.");
   return quantity;
+}
+
+function priceOf(text: string) {
+  try {
+    const value = parseReais(text);
+    if (value > 0) return value;
+  } catch {
+    // cai na mensagem abaixo
+  }
+  throw new DomainError("Informe o preço, por exemplo 49,90.");
 }
 
 export async function createClientAction(raw: unknown) {
@@ -38,93 +57,100 @@ export async function createClientAction(raw: unknown) {
   if (!parsed.success) return { ok: false as const, error: parsed.error.issues[0]?.message || "Revise os dados do cliente." };
   try {
     const { db, org } = await allow("clientes.gravar");
-    await insertClient(db, org.id, { ...parsed.data, whatsapp: parsed.data.whatsapp || parsed.data.phone });
-    revalidatePath("/clientes");
-    return { ok: true as const };
+    const clientId = await insertClient(db, org.id, toClientInput(parsed.data));
+    revalidatePath("/", "layout");
+    return { ok: true as const, clientId };
   } catch (error) {
     return fail(error);
   }
 }
 
-export async function updateClientAction(raw: unknown) {
+export async function updateClientAction(clientId: string, raw: unknown) {
   const parsed = clientSchema.safeParse(raw);
-  const id = typeof raw === "object" && raw && "id" in raw ? String(raw.id) : "";
-  if (!parsed.success || !id) return { ok: false as const, error: parsed.success ? "Revise os dados do cliente." : parsed.error.issues[0]?.message || "Revise os dados do cliente." };
+  if (!parsed.success) return { ok: false as const, error: parsed.error.issues[0]?.message || "Revise os dados do cliente." };
   try {
     const { db, org } = await allow("clientes.gravar");
-    await updateClient(db, org.id, id, { ...parsed.data, whatsapp: parsed.data.whatsapp || parsed.data.phone });
-    revalidatePath("/clientes");
-    revalidatePath(`/clientes/${id}`);
+    await updateClient(db, org.id, clientId, toClientInput(parsed.data));
+    revalidatePath("/", "layout");
     return { ok: true as const };
   } catch (error) {
     return fail(error);
   }
 }
 
-export async function createCatalogAction(raw: unknown) {
-  const parsed = catalogSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false as const, error: "Revise o item do catálogo." };
+export async function saveCatalogAction(formData: FormData) {
+  const parsed = catalogSchema.safeParse({
+    kind: formData.get("kind"),
+    name: formData.get("name"),
+    price: formData.get("price"),
+    category: formData.get("category") ?? "",
+    sku: formData.get("sku") ?? "",
+    stock: formData.get("stock") ?? "",
+  });
+  if (!parsed.success) return { ok: false as const, error: parsed.error.issues[0]?.message || "Revise o item." };
   try {
-    const priceCents = parseReais(parsed.data.price);
     const { db, org } = await allow("catalogo.gravar");
+    const priceCents = priceOf(parsed.data.price);
+    const file = formData.get("photo");
+    // A foto é conferida antes de gravar o item, para uma foto ruim não deixar um item pela metade.
+    const photo = file instanceof File && file.size > 0 ? parsePhoto(new Uint8Array(await file.arrayBuffer())) : null;
     const { stock, ...item } = parsed.data;
-    await insertCatalog(db, org.id, { ...item, priceCents, sku: item.sku || "", stockQuantity: parseStock(item.kind, stock) });
+    const input = { ...item, description: "", priceCents, stockQuantity: parseStock(item.kind, stock) };
+    const existing = String(formData.get("id") || "");
+    let itemId = existing;
+    if (existing) await updateCatalog(db, org.id, existing, input);
+    else itemId = await insertCatalog(db, org.id, input);
+    if (photo) await saveCatalogPhoto(db, org.id, itemId, photo);
     revalidatePath("/produtos");
-    return { ok: true as const };
-  } catch (error) {
-    return fail(error);
-  }
-}
-
-export async function updateCatalogAction(id: string, raw: unknown) {
-  const parsed = catalogSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false as const, error: "Revise o item do catálogo." };
-  try {
-    const priceCents = parseReais(parsed.data.price);
-    const { db, org } = await allow("catalogo.gravar");
-    const { stock, ...item } = parsed.data;
-    await updateCatalog(db, org.id, id, { ...item, priceCents, sku: item.sku || "", stockQuantity: parseStock(item.kind, stock) });
-    revalidatePath("/produtos");
-    return { ok: true as const };
+    return { ok: true as const, itemId };
   } catch (error) {
     return fail(error);
   }
 }
 
 export async function toggleCatalogAction(id: string, active: boolean) {
-  const { db, org } = await allow("catalogo.gravar");
-  await db.update(catalogItems).set({ active }).where(and(eq(catalogItems.organizationId, org.id), eq(catalogItems.id, id)));
-  revalidatePath("/produtos");
+  try {
+    const { db, org } = await allow("catalogo.gravar");
+    await db.update(catalogItems).set({ active }).where(and(eq(catalogItems.organizationId, org.id), eq(catalogItems.id, id)));
+    revalidatePath("/produtos");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
 }
 
 function toSaleInput(data: z.infer<typeof saleSchema>): SaleInput {
   return {
-    clientId: data.clientId,
+    clientId: data.clientId ?? "",
     soldOn: data.soldOn,
-    discountCents: parseReais(data.discount || "0"),
+    discountCents: cents(data.discountCents),
     notes: data.notes,
     mode: data.mode,
-    entryCents: parseReais(data.entry || "0"),
+    entryCents: cents(data.entryCents),
     installmentCount: data.installmentCount,
     firstDue: data.firstDue,
     periodicity: data.periodicity,
     interestMonthlyBp: data.interestMonthlyBp,
     adjustYearlyBp: data.adjustYearlyBp,
     method: data.method,
-    makeContract: data.makeContract,
+    makeContract: false,
     items: data.items.map((item) => ({ ...item, unitCents: cents(item.unitCents) })),
+    paidNow: data.paidNow,
   };
 }
 
 export async function createSaleAction(raw: unknown) {
   const parsed = saleSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false as const, error: "Revise a venda." };
+  if (!parsed.success) return { ok: false as const, error: parsed.error.issues[0]?.message || "Revise a venda." };
   try {
-    const { db, org } = await allow("vendas.criar");
-    const saleId = await createSale(db, org.id, toSaleInput(parsed.data));
-    revalidatePath("/vendas");
-    revalidatePath("/");
-    return { ok: true as const, saleId };
+    const session = await allow("vendas.criar");
+    const { newClient, paidNow } = parsed.data;
+    if (newClient && !can(session.role, "clientes.gravar")) throw new DomainError("Seu papel não pode cadastrar clientes.");
+    if (paidNow && !can(session.role, "pagamentos.registrar")) throw new DomainError("Seu papel não pode registrar recebimentos.");
+    const client = newClient ? toClientInput({ ...newClient, email: "", zip: "", state: "", city: "", district: "", street: "", number: "", complement: "", notes: "" }) : undefined;
+    const saleId = await createSale(session.db, session.org.id, toSaleInput(parsed.data), client);
+    refreshMoney();
+    return { ok: true as const, saleId, received: Boolean(paidNow) };
   } catch (error) {
     return fail(error);
   }
@@ -132,12 +158,11 @@ export async function createSaleAction(raw: unknown) {
 
 export async function updateSaleAction(saleId: string, raw: unknown) {
   const parsed = saleSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false as const, error: "Revise a venda." };
+  if (!parsed.success) return { ok: false as const, error: parsed.error.issues[0]?.message || "Revise a venda." };
   try {
     const { db, org } = await allow("vendas.editar");
     await updateSale(db, org.id, saleId, toSaleInput(parsed.data));
-    revalidatePath("/vendas");
-    revalidatePath("/");
+    refreshMoney();
     return { ok: true as const, saleId };
   } catch (error) {
     return fail(error);
@@ -146,22 +171,20 @@ export async function updateSaleAction(saleId: string, raw: unknown) {
 
 export async function payAction(raw: unknown) {
   const parsed = paymentSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false as const, error: "Revise o pagamento." };
+  if (!parsed.success) return { ok: false as const, error: "Revise o valor e a data do recebimento." };
   try {
     const { db, org } = await allow("pagamentos.registrar");
-    await registerPayment(db, org.id, {
+    const paymentId = await registerPayment(db, org.id, {
       chargeId: parsed.data.chargeId,
       amountCents: parseReais(parsed.data.amount),
       feeCents: parseReais(parsed.data.fee || "0"),
       paidOn: parsed.data.paidOn,
       method: parsed.data.method,
-      note: parsed.data.note,
+      note: "",
       idempotencyKey: parsed.data.idempotencyKey,
     });
-    revalidatePath("/parcelas");
-    revalidatePath("/cobrancas");
-    revalidatePath("/");
-    return { ok: true as const };
+    refreshMoney();
+    return { ok: true as const, paymentId };
   } catch (error) {
     return fail(error);
   }
@@ -171,7 +194,7 @@ export async function reverseAction(chargeId: string) {
   try {
     const { db, org } = await allow("pagamentos.estornar");
     await reverseCharge(db, org.id, chargeId);
-    revalidatePath("/cobrancas");
+    refreshMoney();
     return { ok: true as const };
   } catch (error) {
     return fail(error);
@@ -184,9 +207,21 @@ export async function dueAction(raw: unknown) {
   try {
     const { db, org } = await allow("pagamentos.registrar");
     await changeDueDate(db, org.id, parsed.data.chargeId, parsed.data.dueOn);
-    revalidatePath("/parcelas");
-    revalidatePath("/cobrancas");
+    refreshMoney();
     return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function createChargeAction(raw: unknown) {
+  const parsed = chargeSchema.safeParse(raw);
+  if (!parsed.success) return { ok: false as const, error: "Escolha o cliente, o valor e o vencimento." };
+  try {
+    const { db, org } = await allow("cobrancas.gravar");
+    const chargeId = await createCharge(db, org.id, { clientId: parsed.data.clientId, amountCents: priceOf(parsed.data.amount), dueOn: parsed.data.dueOn, method: parsed.data.method });
+    refreshMoney();
+    return { ok: true as const, chargeId };
   } catch (error) {
     return fail(error);
   }
@@ -196,8 +231,7 @@ export async function cancelSaleAction(saleId: string) {
   try {
     const { db, org } = await allow("vendas.cancelar");
     await cancelSale(db, org.id, saleId);
-    revalidatePath("/vendas");
-    revalidatePath("/");
+    refreshMoney();
     return { ok: true as const };
   } catch (error) {
     return fail(error);
@@ -208,187 +242,33 @@ export async function deleteSaleAction(saleId: string) {
   try {
     const { db, org } = await allow("vendas.excluir");
     await deleteSale(db, org.id, saleId);
-    revalidatePath("/vendas");
-    revalidatePath("/");
+    refreshMoney();
     return { ok: true as const };
   } catch (error) {
     return fail(error);
   }
 }
 
-export async function createContractAction(formData: FormData) {
+export async function contractForSaleAction(saleId: string) {
   try {
     const { db, org } = await allow("contratos.alterar");
-    const clientId = String(formData.get("clientId") || "");
-    const description = String(formData.get("description") || "").trim();
-    const startsOn = String(formData.get("startsOn") || "");
-    const firstDue = String(formData.get("firstDue") || "");
-    const endsOnRaw = String(formData.get("endsOn") || "").trim();
-    const periodicity = String(formData.get("periodicity") || "mensal");
-    const totalCents = parseReais(String(formData.get("total") || ""));
-    const installmentCount = Number(formData.get("installmentCount") || "1");
-    if (!clientId || description.length < 2 || !/^\d{4}-\d{2}-\d{2}$/.test(startsOn) || !/^\d{4}-\d{2}-\d{2}$/.test(firstDue)) {
-      return { ok: false as const, error: "Revise os dados do contrato." };
-    }
-    if (!Number.isInteger(installmentCount) || installmentCount < 1 || installmentCount > 60) {
-      return { ok: false as const, error: "A quantidade de parcelas deve ficar entre 1 e 60." };
-    }
-    if (!["semanal", "quinzenal", "mensal", "trimestral", "semestral", "anual"].includes(periodicity)) {
-      return { ok: false as const, error: "Periodicidade inválida." };
-    }
-    const contractId = await createContract(db, org.id, {
-      clientId,
-      description,
-      totalCents,
-      startsOn,
-      endsOn: endsOnRaw || null,
-      terms: String(formData.get("terms") || "").trim(),
-      installmentCount,
-      firstDue,
-      periodicity: periodicity as Periodicity,
-      method: String(formData.get("method") || "Pix"),
-    });
-    revalidatePath("/contratos");
-    revalidatePath("/");
+    const contractId = await createContractForSale(db, org.id, saleId);
+    revalidatePath(`/vendas/${saleId}`);
     return { ok: true as const, contractId };
   } catch (error) {
     return fail(error);
   }
 }
 
-export async function createRecurrenceAction(formData: FormData) {
+export async function endSubscriptionAction(saleId: string) {
   try {
     const { db, org } = await allow("recorrencias.alterar");
-    const clientId = String(formData.get("clientId") || "");
-    const description = String(formData.get("description") || "").trim();
-    const startsOn = String(formData.get("startsOn") || "");
-    const endsOnRaw = String(formData.get("endsOn") || "").trim();
-    const periodicity = String(formData.get("periodicity") || "mensal");
-    const amountCents = parseReais(String(formData.get("amount") || ""));
-    if (!clientId || description.length < 2 || !/^\d{4}-\d{2}-\d{2}$/.test(startsOn)) {
-      return { ok: false as const, error: "Revise os dados da recorrência." };
-    }
-    if (!["semanal", "quinzenal", "mensal", "trimestral", "semestral", "anual"].includes(periodicity)) {
-      return { ok: false as const, error: "Periodicidade inválida." };
-    }
-    const recurrenceId = await createRecurrence(db, org.id, {
-      clientId,
-      description,
-      amountCents,
-      periodicity: periodicity as Periodicity,
-      startsOn,
-      endsOn: endsOnRaw || null,
-      method: String(formData.get("method") || "Pix"),
-    });
-    revalidatePath("/recorrencias");
-    revalidatePath("/");
-    return { ok: true as const, recurrenceId };
-  } catch (error) {
-    return fail(error);
-  }
-}
-
-export async function createChargeAction(formData: FormData) {
-  try {
-    const { db, org } = await allow("cobrancas.gravar");
-    const clientId = String(formData.get("clientId") || "");
-    const dueOn = String(formData.get("dueOn") || "");
-    const amountCents = parseReais(String(formData.get("amount") || ""));
-    if (!clientId || !/^\d{4}-\d{2}-\d{2}$/.test(dueOn)) {
-      return { ok: false as const, error: "Revise os dados da cobrança." };
-    }
-    const chargeId = await createCharge(db, org.id, {
-      clientId,
-      amountCents,
-      dueOn,
-      method: String(formData.get("method") || "Pix"),
-    });
-    revalidatePath("/cobrancas");
-    revalidatePath("/");
-    return { ok: true as const, chargeId };
-  } catch (error) {
-    return fail(error);
-  }
-}
-
-export async function editContractAction(contractId: string, formData: FormData) {
-  try {
-    const { db, org } = await allow("contratos.alterar");
-    const description = String(formData.get("description") || "").trim();
-    const startsOn = String(formData.get("startsOn") || "");
-    const endsOnRaw = String(formData.get("endsOn") || "").trim();
-    if (description.length < 2 || !/^\d{4}-\d{2}-\d{2}$/.test(startsOn)) {
-      return { ok: false as const, error: "Revise os dados do contrato." };
-    }
-    await updateContract(db, org.id, contractId, {
-      description,
-      startsOn,
-      endsOn: endsOnRaw || null,
-      terms: String(formData.get("terms") || "").trim(),
-    });
-    revalidatePath("/contratos");
-    revalidatePath(`/contratos/${contractId}/editar`);
+    await endSubscription(db, org.id, saleId, todayIn(org.timezone));
+    refreshMoney();
     return { ok: true as const };
   } catch (error) {
     return fail(error);
   }
-}
-
-export async function editRecurrenceAction(recurrenceId: string, formData: FormData) {
-  try {
-    const { db, org } = await allow("recorrencias.alterar");
-    const description = String(formData.get("description") || "").trim();
-    const amountCents = parseReais(String(formData.get("amount") || ""));
-    const endsOnRaw = String(formData.get("endsOn") || "").trim();
-    if (description.length < 2) return { ok: false as const, error: "Revise a descrição." };
-    await updateRecurrence(db, org.id, recurrenceId, {
-      description,
-      amountCents,
-      endsOn: endsOnRaw || null,
-    });
-    revalidatePath("/recorrencias");
-    revalidatePath(`/recorrencias/${recurrenceId}/editar`);
-    return { ok: true as const };
-  } catch (error) {
-    return fail(error);
-  }
-}
-
-export async function contractAction(id: string, status: "ativo" | "suspenso" | "encerrado") {
-  try {
-    const { db, org } = await allow("contratos.alterar");
-    await setContractStatus(db, org.id, id, status);
-    revalidatePath("/contratos");
-    return { ok: true as const };
-  } catch (error) {
-    return fail(error);
-  }
-}
-
-export async function recurrenceAction(id: string, status: "ativa" | "suspensa" | "cancelada") {
-  const { db, org } = await allow("recorrencias.alterar");
-  await setRecurrenceStatus(db, org.id, id, status);
-  revalidatePath("/recorrencias");
-}
-
-export async function contactAction(raw: unknown) {
-  const parsed = contactSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false as const, error: "Revise o contato." };
-  const { db, org } = await allow("cobrancas.contatar");
-  const [client] = await db.select().from(clients).where(and(eq(clients.organizationId, org.id), eq(clients.id, parsed.data.clientId)));
-  if (!client) return { ok: false as const, error: "Cliente não encontrado." };
-  await db.insert(contacts).values({
-    id: crypto.randomUUID(),
-    organizationId: org.id,
-    clientId: parsed.data.clientId,
-    chargeId: parsed.data.chargeId,
-    channel: parsed.data.channel,
-    summary: parsed.data.summary,
-    promiseOn: parsed.data.promiseOn || null,
-    createdAt: new Date().toISOString(),
-  });
-  revalidatePath("/inadimplencia");
-  return { ok: true as const };
 }
 
 const environments = {
@@ -445,43 +325,63 @@ export async function asaasAction(command: "connect" | "disconnect" | "sync" | "
 }
 
 export async function resetDemoAction() {
-  const { db, org, userName } = await allow("demo.resetar");
+  const { db, org, userName, publicDemo } = await allow("demo.resetar");
+  if (!publicDemo) throw new DomainError("Só a demonstração pública pode ser restaurada.");
   await resetOrganization(db, org.id, userName);
   revalidatePath("/", "layout");
 }
 
 export async function companyAction(formData: FormData) {
-  const { db, org } = await allow("empresa.gravar");
-  const document = String(formData.get("document") || org.document);
-  if (!isValidCnpj(document)) return { ok: false as const, error: "CNPJ inválido." };
-  let late = { lateFineBp: org.lateFineBp, lateInterestMonthlyBp: org.lateInterestMonthlyBp };
   try {
-    const fine = formData.get("lateFine");
-    const interest = formData.get("lateInterest");
-    late = {
-      lateFineBp: fine === null ? org.lateFineBp : parsePercentBp(String(fine)),
-      lateInterestMonthlyBp: interest === null ? org.lateInterestMonthlyBp : parsePercentBp(String(interest)),
-    };
-  } catch {
-    return { ok: false as const, error: "Informe multa e juros como percentual." };
+    const { db, org } = await allow("empresa.gravar");
+    const document = String(formData.get("document") || "").trim();
+    if (document && !isValidCnpj(document) && documentKind(document) !== "pf") return { ok: false as const, error: "CNPJ ou CPF inválido." };
+    const timezone = String(formData.get("timezone") || org.timezone);
+    if (timezone !== org.timezone && !isBrazilZone(timezone)) return { ok: false as const, error: "Escolha um fuso horário da lista." };
+    let late: { lateFineBp: number; lateInterestMonthlyBp: number };
+    try {
+      late = {
+        lateFineBp: parsePercentBp(String(formData.get("lateFine") || "0")),
+        lateInterestMonthlyBp: parsePercentBp(String(formData.get("lateInterest") || "0")),
+      };
+    } catch {
+      return { ok: false as const, error: "Informe multa e juros como percentual, por exemplo 2 ou 1,5." };
+    }
+    const lateError = lateSettingsError(late);
+    if (lateError) return { ok: false as const, error: lateError };
+    const tradeName = String(formData.get("tradeName") || "").trim();
+    if (tradeName.length < 2) return { ok: false as const, error: "Informe o nome da empresa." };
+    await db
+      .update(organizations)
+      .set({
+        ...late,
+        tradeName,
+        legalName: String(formData.get("legalName") || "").trim(),
+        document,
+        email: String(formData.get("email") || "").trim(),
+        phone: String(formData.get("phone") || "").trim(),
+        address: String(formData.get("address") || "").trim(),
+        timezone,
+      })
+      .where(eq(organizations.id, org.id));
+    revalidatePath("/", "layout");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
   }
-  const lateError = lateSettingsError(late);
-  if (lateError) return { ok: false as const, error: lateError };
-  await db
-    .update(organizations)
-    .set({
-      ...late,
-      tradeName: String(formData.get("tradeName") || org.tradeName),
-      legalName: String(formData.get("legalName") || org.legalName),
-      document,
-      email: String(formData.get("email") || org.email),
-      phone: String(formData.get("phone") || org.phone),
-      address: String(formData.get("address") || org.address),
-      timezone: String(formData.get("timezone") || org.timezone),
-    })
-    .where(eq(organizations.id, org.id));
-  revalidatePath("/configuracoes");
-  return { ok: true as const };
+}
+
+export async function receivingAction(formData: FormData) {
+  try {
+    const { db, org } = await allow("empresa.gravar");
+    const pixKey = String(formData.get("pixKey") || "").trim().slice(0, 140);
+    const paymentInstructions = String(formData.get("instructions") || "").trim().slice(0, 600);
+    await db.update(organizations).set({ pixKey, paymentInstructions }).where(eq(organizations.id, org.id));
+    revalidatePath("/", "layout");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
 }
 
 export async function inviteAction(formData: FormData) {
@@ -492,7 +392,7 @@ export async function inviteAction(formData: FormData) {
     const role = String(formData.get("role") || "");
     if (name.length < 2 || !email.includes("@") || !isRole(role)) return { ok: false as const, error: "Revise o convite." };
     await db.insert(members).values({ id: crypto.randomUUID(), organizationId: org.id, name, email, role, active: true });
-    revalidatePath("/configuracoes");
+    revalidatePath("/equipe");
     return { ok: true as const };
   } catch (error) {
     return fail(error);
@@ -511,7 +411,7 @@ export async function roleAction(memberId: string, role: string) {
       return { ok: false as const, error: "A empresa precisa de um administrador." };
     }
     await db.update(members).set({ role }).where(and(eq(members.organizationId, org.id), eq(members.id, memberId)));
-    revalidatePath("/configuracoes");
+    revalidatePath("/equipe");
     return { ok: true as const };
   } catch (error) {
     return fail(error);
@@ -574,30 +474,6 @@ export async function cancelFiscalAction(documentId: string) {
     const { db, org } = await allow("fiscal.emitir");
     await db.update(fiscalDocuments).set({ status: "cancelada" }).where(and(eq(fiscalDocuments.organizationId, org.id), eq(fiscalDocuments.id, documentId), eq(fiscalDocuments.status, "emitida")));
     revalidatePath("/fiscal");
-    return { ok: true as const };
-  } catch (error) {
-    return fail(error);
-  }
-}
-
-export async function adjustStockAction(itemId: string, quantity: number) {
-  try {
-    const { db, org } = await allow("estoque.ajustar");
-    if (!Number.isInteger(quantity) || quantity < 0) return { ok: false as const, error: "Informe uma quantidade inteira." };
-    const [item] = await db.select().from(catalogItems).where(and(eq(catalogItems.organizationId, org.id), eq(catalogItems.id, itemId)));
-    if (!item || item.kind === "servico") return { ok: false as const, error: "Serviço não controla estoque." };
-    const delta = quantity - (item.stockQuantity ?? 0);
-    await db.update(catalogItems).set({ stockQuantity: quantity }).where(eq(catalogItems.id, itemId));
-    await db.insert(stockMoves).values({
-      id: crypto.randomUUID(),
-      organizationId: org.id,
-      catalogItemId: itemId,
-      saleId: null,
-      quantity: delta,
-      reason: "ajuste",
-      createdAt: new Date().toISOString(),
-    });
-    revalidatePath("/produtos");
     return { ok: true as const };
   } catch (error) {
     return fail(error);

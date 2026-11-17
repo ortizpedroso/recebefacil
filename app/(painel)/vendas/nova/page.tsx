@@ -1,21 +1,29 @@
-import { SaleWizard } from "@/components/sale-wizard";
-import { Card, Title } from "@/components/ui";
-import { loadBook } from "@/lib/read";
+import { and, asc, eq } from "drizzle-orm";
+import { NewSale } from "@/components/new-sale";
+import { Title } from "@/components/ui";
+import { todayIn } from "@/lib/dates";
+import { photoIds } from "@/lib/receivables";
+import { catalogItems, clients } from "@/lib/schema";
 import { requireSession } from "@/lib/session";
+import { isCatalogKind } from "@/lib/labels";
 
-export default async function NovaVendaPage() {
-  const session = await requireSession();
-  const book = await loadBook(session.db, session.org.id, session.org.timezone);
+export default async function NovaVendaPage({ searchParams }: { searchParams: Promise<{ cliente?: string }> }) {
+  const { cliente } = await searchParams;
+  const { db, org } = await requireSession();
+  const [people, items, photos] = await Promise.all([
+    db.select({ id: clients.id, name: clients.name, phone: clients.whatsapp }).from(clients).where(eq(clients.organizationId, org.id)).orderBy(asc(clients.name)),
+    db.select().from(catalogItems).where(and(eq(catalogItems.organizationId, org.id), eq(catalogItems.active, true))).orderBy(asc(catalogItems.name)),
+    photoIds(db, org.id),
+  ]);
   return (
     <div>
-      <Title hint="O servidor recalcula as parcelas. A primeira parcela fica com o centavo restante.">Nova venda</Title>
-      <Card>
-        <SaleWizard
-          today={book.today}
-          clients={book.clients.filter((client) => client.active).map((client) => ({ id: client.id, name: client.name }))}
-          catalog={book.catalog.filter((item) => item.active).map((item) => ({ id: item.id, name: item.name, priceCents: item.priceCents, kind: item.kind as "produto" | "servico" }))}
-        />
-      </Card>
+      <Title hint="Uma tela só. Escolha o cliente, toque nos produtos e diga como vai receber.">Nova venda</Title>
+      <NewSale
+        today={todayIn(org.timezone)}
+        initialClientId={cliente ?? ""}
+        clients={people}
+        catalog={items.map((item) => ({ id: item.id, name: item.name, priceCents: item.priceCents, kind: isCatalogKind(item.kind) ? item.kind : "produto", photoId: photos.get(item.id) ?? null, stock: item.stockQuantity }))}
+      />
     </div>
   );
 }

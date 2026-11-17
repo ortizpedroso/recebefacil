@@ -8,7 +8,7 @@ import { payPlatformInvoice, subscribe } from "./billing";
 import { openIsolatedDatabase } from "./db";
 import { DomainError, createSale } from "./ledger";
 import { cents } from "./money";
-import { pagedCharges } from "./read";
+import { bucketCounts, listReceivables } from "./receivables";
 import { catalogItems, charges, organizations, platformInvoices, sales } from "./schema";
 import { insertCatalog, insertClient } from "./tenant";
 
@@ -59,7 +59,6 @@ test("a venda de produto baixa o estoque e recusa quantidade maior", async () =>
     category: "Peças",
     sku: "P1",
     priceCents: cents(1000),
-    billing: "pontual",
     stockQuantity: 1,
   });
   const sale = {
@@ -146,7 +145,9 @@ test("parcelas passam para a página seguinte", async () => {
       status: "pendente",
     });
   }
-  const listed = await pagedCharges(db, organizationId, 2, "parcelas");
-  assert.equal(listed.pages, 2);
-  assert.equal(listed.rows.length, 1);
+  const settings = { lateFineBp: 200, lateInterestMonthlyBp: 100 };
+  assert.equal((await bucketCounts(db, organizationId, "2026-11-16")).proximas, 9);
+  const second = await listReceivables(db, organizationId, "2026-11-16", settings, { bucket: "proximas", limit: 8, offset: 8 });
+  assert.equal(second.length, 1);
+  assert.equal(second[0].title, "Parcela 9");
 });

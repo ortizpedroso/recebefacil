@@ -11,6 +11,10 @@ export type DB = NodePgDatabase<typeof schema>;
 
 const globalDb = globalThis as unknown as { recebefacilDb?: Promise<DB> };
 
+export function dataDir() {
+  return process.env.RECEBEFACIL_DATA || "/tmp/recebefacil-data";
+}
+
 export async function migrate(exec: (statement: string) => Promise<void>) {
   const statements = [
     ...SCHEMA_SQL.split(";")
@@ -42,8 +46,7 @@ async function openDatabase(): Promise<DB> {
     });
     return db;
   }
-  const dir = process.env.RECEBEFACIL_DATA || "/tmp/recebefacil-data";
-  return openIsolatedDatabase(dir);
+  return openIsolatedDatabase(dataDir());
 }
 
 export function getDb(): Promise<DB> {

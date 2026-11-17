@@ -38,3 +38,10 @@ export function isValidCnpj(value: string) {
 export function isValidDocument(value: string, kind: "pf" | "pj") {
   return kind === "pj" ? isValidCnpj(value) : isValidCpf(value);
 }
+
+// O tipo da pessoa sai do documento: 11 dígitos é CPF, 14 é CNPJ. Vazio ou inválido devolve null.
+export function documentKind(value: string): "pf" | "pj" | null {
+  if (isValidCpf(value)) return "pf";
+  if (isValidCnpj(value)) return "pj";
+  return null;
+}

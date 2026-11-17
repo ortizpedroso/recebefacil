@@ -27,7 +27,9 @@ npm start
 
 ## Variáveis
 
-`DATABASE_URL` é opcional no desenvolvimento. Não coloque chave de Asaas. A tela de integrações não lê segredo.
+`DATABASE_URL` é opcional no desenvolvimento. Não coloque chave de Asaas.
+
+`RECEBEFACIL_SECRET` (mínimo de 32 caracteres) assina os links de pagamento. Em produção ela é obrigatória, e trocá-la invalida os links já enviados. No desenvolvimento, sem a variável, um segredo é gerado e guardado em `.secret` na pasta de dados.
 
 ## O que é demonstrativo
 

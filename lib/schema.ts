@@ -18,6 +18,8 @@ export const organizations = pgTable(
     asaasSyncedAt: text("asaas_synced_at"),
     lateFineBp: integer("late_fine_bp").notNull().default(200),
     lateInterestMonthlyBp: integer("late_interest_monthly_bp").notNull().default(100),
+    pixKey: text("pix_key").notNull().default(""),
+    paymentInstructions: text("payment_instructions").notNull().default(""),
     createdAt: text("created_at").notNull(),
   },
   (table) => [uniqueIndex("organizations_viewer_key").on(table.viewerKey)],
@@ -72,11 +74,24 @@ export const catalogItems = pgTable(
     category: text("category").notNull(),
     sku: text("sku").notNull(),
     priceCents: integer("price_cents").notNull(),
-    billing: text("billing").notNull(),
+    billing: text("billing").notNull().default("pontual"),
     stockQuantity: integer("stock_quantity"),
     active: boolean("active").notNull(),
   },
   (table) => [index("catalog_org").on(table.organizationId)],
+);
+
+export const catalogImages = pgTable(
+  "catalog_images",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    catalogItemId: text("catalog_item_id").notNull(),
+    mime: text("mime").notNull(),
+    bytes: text("bytes").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [uniqueIndex("catalog_images_item").on(table.catalogItemId)],
 );
 
 export const sales = pgTable(

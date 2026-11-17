@@ -47,7 +47,7 @@ export async function requireSession(): Promise<Session> {
     const role = await actorRole(db, org.id, "camila@exemplo.com");
     return { db, org, userName: "Visitante", publicDemo: true, role, ...profileFor("Visitante", true) };
   }
-  const org = await ensureOrganization(db, `${identity.stage}:${identity.sub}`, identity.name || identity.email || "Conta");
+  const org = await ensureOrganization(db, `${identity.stage}:${identity.sub}`, identity.name || identity.email || "Conta", identity.email || undefined);
   if (!org) throw new Error("Organização indisponível.");
   const userName = identity.name || identity.email || "Conta";
   const actorEmail = identity.simulated ? "camila@exemplo.com" : identity.email || "";

@@ -1,41 +1,25 @@
-import { roleAction } from "@/app/actions";
-import { InviteForm, CompanyForm } from "@/components/forms";
-import { buttonClass, Card, inputClass, Title } from "@/components/ui";
-import { roleLabel, roles } from "@/lib/access";
-import { loadBook } from "@/lib/read";
+import { CompanyForm } from "@/components/settings-forms";
+import { Card, Title } from "@/components/ui";
+import { roleLabel } from "@/lib/access";
 import { requireSession } from "@/lib/session";
 
 export default async function ConfiguracoesPage() {
   const session = await requireSession();
-  const book = await loadBook(session.db, session.org.id, session.org.timezone);
-  const org = session.org;
+  const { org } = session;
   return (
     <div className="space-y-4">
-      <Title hint="A senha de acesso é a da conta autenticada. Esta tela não guarda senha.">Configurações</Title>
+      <Title hint="Estes dados aparecem no recibo, no contrato e no link de pagamento.">Minha empresa</Title>
       <Card>
-        <CompanyForm tradeName={org.tradeName} legalName={org.legalName} document={org.document} email={org.email} phone={org.phone} timezone={org.timezone} address={org.address} lateFineBp={org.lateFineBp} lateInterestMonthlyBp={org.lateInterestMonthlyBp} />
+        <CompanyForm
+          company={{ tradeName: org.tradeName, legalName: org.legalName, document: org.document, email: org.email, phone: org.phone, address: org.address, timezone: org.timezone, lateFineBp: org.lateFineBp, lateInterestMonthlyBp: org.lateInterestMonthlyBp }}
+        />
       </Card>
-      <Card>
-        <p className="mb-1 font-medium">Usuário e conta</p>
-        <p className="text-sm text-[#64748B]">{session.profileName} · {session.profileEmail} · {roleLabel(session.role)}</p>
-        <p className="mt-2 text-xs text-[#64748B]">A senha é a da conta autenticada (Cursor). Este app não guarda senha. Moeda BRL e datas no padrão brasileiro são fixos.</p>
-      </Card>
-      <Card>
-        <p className="mb-1 font-medium">Equipe</p>
-        <p className="mb-3 text-sm text-[#64748B]">Seu papel nesta sessão é {roleLabel(session.role)}. Na demonstração, esse papel segue o cadastro de camila@exemplo.com. Um convite grava a pessoa na empresa.</p>
-        <InviteForm />
-        <div className="mt-4 space-y-2">
-          {book.members.map((member) => (
-            <form key={member.id} className="flex flex-wrap items-center gap-2 text-sm" action={async (formData) => { "use server"; await roleAction(member.id, String(formData.get("role") || "")); }}>
-              <span className="min-w-40">{member.name}</span>
-              <span className="text-[#64748B]">{member.email}</span>
-              <select name="role" defaultValue={member.role} className={inputClass} aria-label={`Papel de ${member.name}`}>
-                {roles.map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
-              </select>
-              <button className={buttonClass}>Salvar papel</button>
-            </form>
-          ))}
-        </div>
+      <Card className="space-y-1 text-sm">
+        <h2 className="font-bold text-slate-900">Sua conta</h2>
+        <p className="text-slate-600">
+          {session.profileName}
+          {session.profileEmail ? ` · ${session.profileEmail}` : ""} · {roleLabel(session.role)}
+        </p>
       </Card>
     </div>
   );

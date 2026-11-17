@@ -102,8 +102,8 @@ test("duas aberturas ao mesmo tempo criam uma empresa só", async () => {
   const dir = await mkdtemp(join(tmpdir(), "recebefacil-"));
   const db = await openIsolatedDatabase(dir);
   const [first, second] = await Promise.all([
-    ensureOrganization(db, "viewer:paralelo", "Ana"),
-    ensureOrganization(db, "viewer:paralelo", "Bruno"),
+    ensureOrganization(db, "public:demonstracao", "Ana"),
+    ensureOrganization(db, "public:demonstracao", "Bruno"),
   ]);
   assert.equal(first.id, second.id);
   const rows = await db.select().from(clients).where(eq(clients.organizationId, first.id));
