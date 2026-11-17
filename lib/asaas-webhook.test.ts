@@ -146,7 +146,7 @@ test("chargeback desfaz o recebimento, mas um evento velho com o Asaas ainda pag
   assert.equal((await chargeRow(db, chargeId)).status, "pendente");
 });
 
-test("PAYMENT_DELETED solta o vínculo da cobrança e PAYMENT_OVERDUE mantém", async () => {
+test("PAYMENT_DELETED solta o vínculo da cobrança e PAYMENT_OVERDUE de cobrança de lojista não muda nada", async () => {
   const { db, token } = await database();
   const fake = fakeAsaas();
   const { chargeId, paymentId } = await liveCharge({ id: "org-apagada" }, fake);
@@ -192,7 +192,7 @@ test("erro depois de gravar o evento, dentro da transação, desfaz o evento jun
   }
 });
 
-test("a tabela de rotas leva cobranças com prefixo reservado para fora das cobranças comuns", async () => {
+test("uma cobrança com prefixo sub: vai para a rota do plano e nunca baixa a cobrança de um lojista", async () => {
   const { db, token } = await database();
   const fake = fakeAsaas();
   const { chargeId, paymentId } = await liveCharge({ id: "org-prefixo" }, fake);
@@ -201,9 +201,8 @@ test("a tabela de rotas leva cobranças com prefixo reservado para fora das cobr
   const sub = event("PAYMENT_RECEIVED", paymentId);
   const response = await handleAsaasWebhook(request(sub, token), { db, fetch: fake.fetch, now: NOW });
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { status: "ignorado" });
   assert.equal((await paymentsOf(chargeId)).length, 0);
-  assert.equal((await db.select().from(asaasWebhookEvents).where(eq(asaasWebhookEvents.id, sub.id))).length, 0, "ignorado não é gravado");
+  assert.equal((await chargeRow(db, chargeId)).status, "pendente");
 });
 
 test("evento desconhecido, corpo inválido e corpo grande demais têm respostas próprias", async () => {
@@ -218,10 +217,12 @@ test("evento desconhecido, corpo inválido e corpo grande demais têm respostas 
   assert.equal((await handleAsaasWebhook(request(huge, token), { db })).status, 413);
 });
 
-test("a lista de eventos mostrada ao dono vem da tabela de rotas e não traz o que não muda nada", () => {
+test("a lista de eventos mostrada ao dono vem das tabelas de eventos e traz o que a assinatura do plano usa", () => {
   assert.ok(WEBHOOK_EVENTS_TO_ENABLE.includes("PAYMENT_RECEIVED"));
   assert.ok(WEBHOOK_EVENTS_TO_ENABLE.includes("PAYMENT_REFUNDED"));
-  assert.ok(!WEBHOOK_EVENTS_TO_ENABLE.includes("PAYMENT_OVERDUE"));
+  assert.ok(WEBHOOK_EVENTS_TO_ENABLE.includes("PAYMENT_OVERDUE"));
+  assert.ok(WEBHOOK_EVENTS_TO_ENABLE.includes("SUBSCRIPTION_DELETED"));
+  assert.ok(!WEBHOOK_EVENTS_TO_ENABLE.includes("PAYMENT_CREATED"));
 });
 
 test("Recebi manual numa cobrança do Asaas avisa o Asaas, e o webhook que vem depois não conta de novo", async () => {

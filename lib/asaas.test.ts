@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { accountOf, AsaasError, createAsaasClient, fromReais, isAsaasUrl, stageOf, toReais } from "./asaas";
+import { accountOf, AsaasError, createAsaasClient, fromReais, isAsaasUrl, stageOf, subscriptionLive, toReais } from "./asaas";
 import { cents } from "./money";
 import { fakeAsaas } from "./test-asaas";
 
@@ -196,4 +196,64 @@ test("só link https do próprio Asaas serve de destino do pagador", () => {
   assert.equal(isAsaasUrl("http://www.asaas.com/i/abc"), false);
   assert.equal(isAsaasUrl("https://asaas.com.malvado.com/i/abc"), false);
   assert.equal(isAsaasUrl("javascript:alert(1)"), false);
+});
+
+test("a assinatura sai mensal, com tipo livre e valor em reais, e volta com o valor em centavos", async () => {
+  const fake = fakeAsaas();
+  const client = clientFor(fake);
+  const created = await client.createSubscription({ customer: "cus_1", valueCents: cents(4_990), nextDueDate: "2026-11-17", description: "RecebeFácil plano Gestão", externalReference: "sub:org-1" });
+  assert.deepEqual(fake.callsTo("POST", /^\/subscriptions$/)[0].body, {
+    customer: "cus_1",
+    billingType: "UNDEFINED",
+    value: 49.9,
+    nextDueDate: "2026-11-17",
+    cycle: "MONTHLY",
+    description: "RecebeFácil plano Gestão",
+    externalReference: "sub:org-1",
+  });
+  assert.equal(created.valueCents, 4_990);
+  assert.equal(created.externalReference, "sub:org-1");
+  assert.equal(subscriptionLive(created), true);
+
+  const updated = await client.updateSubscription(created.id, { valueCents: cents(3_990), description: "RecebeFácil plano Integrado" });
+  assert.deepEqual(fake.callsTo("POST", new RegExp(`^/subscriptions/${created.id}$`))[0].body, { value: 39.9, description: "RecebeFácil plano Integrado", updatePendingPayments: true });
+  assert.equal(updated.valueCents, 3_990);
+
+  const [first] = await client.listSubscriptionPayments(created.id);
+  assert.equal(first.externalReference, "sub:org-1");
+  assert.equal(first.valueCents, 3_990);
+  assert.equal(first.dueDate, "2026-11-17");
+
+  await client.deleteSubscription(created.id);
+  const removed = await client.getSubscription(created.id);
+  assert.equal(subscriptionLive(removed), false);
+});
+
+test("ao procurar assinaturas por referência, o que é de outra referência não entra, mesmo que o Asaas ignore o filtro", async () => {
+  const everything = (async () =>
+    new Response(
+      JSON.stringify({
+        data: [
+          { id: "sub_a", value: 10, status: "ACTIVE", externalReference: "sub:org-a" },
+          { id: "sub_b", value: 10, status: "ACTIVE", externalReference: "sub:org-b" },
+          { id: "sub_c", value: 10, status: "ACTIVE", externalReference: null },
+        ],
+      }),
+      { status: 200 },
+    )) as unknown as typeof fetch;
+  const found = await createAsaasClient({ apiKey: "test-key", environment: "sandbox", fetch: everything }).findSubscriptions("sub:org-b");
+  assert.deepEqual(found.map((subscription) => subscription.id), ["sub_b"]);
+});
+
+test("resposta de assinatura sem id vira erro de resposta, e erro do Asaas ao criar sai limpo", async () => {
+  const bad = (async () => new Response(JSON.stringify({ value: 10 }), { status: 200 })) as unknown as typeof fetch;
+  const error = await failureOf(() => createAsaasClient({ apiKey: "test-key", environment: "sandbox", fetch: bad }).getSubscription("sub_x"));
+  assert.equal(error.kind, "response");
+
+  const fake = fakeAsaas();
+  fake.failNext("POST", /^\/subscriptions$/, 400, 1, { errors: [{ description: "O CPF/CNPJ informado é inválido." }] });
+  const rejected = await failureOf(() => clientFor(fake).createSubscription({ customer: "cus_1", valueCents: cents(100), nextDueDate: "2026-11-17", description: "x", externalReference: "sub:o" }));
+  assert.equal(rejected.kind, "rejected");
+  assert.match(rejected.message, /CPF\/CNPJ/);
+  assert.equal(fake.callsTo("POST", /^\/subscriptions$/).length, 1, "criar não repete: poderia cobrar duas vezes");
 });

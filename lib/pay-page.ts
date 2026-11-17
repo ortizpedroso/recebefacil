@@ -1,4 +1,5 @@
 import { and, eq } from "drizzle-orm";
+import { onlineAllowed } from "./billing";
 import { todayIn } from "./dates";
 import type { DB } from "./db";
 import { documentKind } from "./documents";
@@ -61,7 +62,7 @@ export async function loadPayPage(db: DB, token: string): Promise<PayPage | null
     if (text) items = [{ description: text, quantity: 1, unitCents: charge.amountCents, photoId: null }];
   }
 
-  const online = state === "open" && isIntegrated(org, await loadPlatformSettings(db)) ? { needsDocument: documentKind(client.document) === null } : null;
+  const online = state === "open" && isIntegrated(org, await loadPlatformSettings(db)) && (await onlineAllowed(db, org, charge)) ? { needsDocument: documentKind(client.document) === null } : null;
 
   return {
     company: { name: org.tradeName, phone: org.phone, email: org.email, pixKey: org.pixKey, instructions: org.paymentInstructions },

@@ -20,6 +20,7 @@ export const organizations = pgTable(
     receivingMode: text("receiving_mode").$type<"gestao" | "integrado">().notNull().default("gestao"),
     asaasWalletId: text("asaas_wallet_id").notNull().default(""),
     asaasAccountName: text("asaas_account_name").notNull().default(""),
+    asaasCustomerId: text("asaas_customer_id"),
     createdAt: text("created_at").notNull(),
   },
   (table) => [uniqueIndex("organizations_viewer_key").on(table.viewerKey)],
@@ -252,24 +253,42 @@ export const dueChanges = pgTable("due_changes", {
   createdAt: text("created_at").notNull(),
 });
 
-export const subscriptions = pgTable("subscriptions", {
-  id: text("id").primaryKey(),
-  organizationId: text("organization_id").notNull(),
-  planCode: text("plan_code").notNull(),
-  status: text("status").notNull(),
-  trialEndsOn: text("trial_ends_on").notNull(),
-  periodEndsOn: text("period_ends_on").notNull(),
-});
+export type PlanCode = "gestao" | "integrado";
+export type SubscriptionStatus = "teste" | "aguardando_pagamento" | "ativa" | "inadimplente" | "cancelada";
+export type InvoiceStatus = "aberta" | "vencida" | "paga" | "estornada" | "cancelada";
 
-export const platformInvoices = pgTable("platform_invoices", {
-  id: text("id").primaryKey(),
-  organizationId: text("organization_id").notNull(),
-  subscriptionId: text("subscription_id").notNull(),
-  amountCents: integer("amount_cents").notNull(),
-  status: text("status").notNull(),
-  dueOn: text("due_on").notNull(),
-  paidOn: text("paid_on"),
-});
+export const subscriptions = pgTable(
+  "subscriptions",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    planCode: text("plan_code").$type<PlanCode>().notNull(),
+    status: text("status").$type<SubscriptionStatus>().notNull(),
+    trialEndsOn: text("trial_ends_on").notNull(),
+    periodEndsOn: text("period_ends_on").notNull(),
+    asaasSubscriptionId: text("asaas_subscription_id"),
+  },
+  (table) => [
+    uniqueIndex("subscriptions_organization").on(table.organizationId),
+    uniqueIndex("subscriptions_asaas_subscription").on(table.asaasSubscriptionId).where(sql`asaas_subscription_id is not null`),
+  ],
+);
+
+export const platformInvoices = pgTable(
+  "platform_invoices",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    subscriptionId: text("subscription_id").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    status: text("status").$type<InvoiceStatus>().notNull(),
+    dueOn: text("due_on").notNull(),
+    paidOn: text("paid_on"),
+    asaasPaymentId: text("asaas_payment_id"),
+    invoiceUrl: text("invoice_url"),
+  },
+  (table) => [uniqueIndex("platform_invoices_asaas_payment").on(table.asaasPaymentId).where(sql`asaas_payment_id is not null`)],
+);
 
 export const fiscalDocuments = pgTable(
   "fiscal_documents",

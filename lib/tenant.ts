@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
+import { startTrial } from "./billing";
+import { todayIn } from "./dates";
 import { insertClient } from "./clients";
 import type { DB } from "./db";
 import { cents, type Cents } from "./money";
 import { DomainError } from "./errors";
 import { tracksStock, type CatalogKind } from "./labels";
-import { DEFAULT_COMPANY_NAME } from "./onboarding";
+import { DEFAULT_COMPANY_NAME, PUBLIC_DEMO_KEY } from "./onboarding";
 import { createSale, registerPayment, type SaleInput } from "./ledger";
 import {
   catalogItems,
@@ -232,8 +234,6 @@ export async function seedOrganization(db: DB, organizationId: string) {
   ]);
 }
 
-export const PUBLIC_DEMO_KEY = "public:demonstracao";
-
 const DEMO_COMPANY = {
   tradeName: "Horizonte Comércio & Serviços",
   legalName: "Horizonte Comércio Demonstração Ltda",
@@ -274,8 +274,9 @@ export async function ensureOrganization(db: DB, viewerKey: string, userName: st
       ...(demo ? DEMO_COMPANY : NEW_COMPANY),
       createdAt: new Date().toISOString(),
     });
-    // Só a demonstração pública nasce com dados de exemplo. Empresa nova começa vazia.
+    // Só a demonstração pública nasce com dados de exemplo e sem plano. Empresa nova começa vazia, com 14 dias de teste.
     if (demo) await seedOrganization(scoped, id);
+    else await startTrial(scoped, id, todayIn(NEW_COMPANY.timezone));
     await scoped.insert(members).values({
       id: randomUUID(),
       organizationId: id,

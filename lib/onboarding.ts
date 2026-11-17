@@ -1,5 +1,7 @@
 export const DEFAULT_COMPANY_NAME = "Minha empresa";
 
+export const PUBLIC_DEMO_KEY = "public:demonstracao";
+
 export type Step = { key: string; label: string; href: string; done: boolean };
 
 export function onboardingSteps(facts: { tradeName: string; pixKey: string; products: number; sales: number }): Step[] {

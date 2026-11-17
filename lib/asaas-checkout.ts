@@ -1,7 +1,8 @@
 import { and, eq, isNull } from "drizzle-orm";
-import { AsaasError, isAsaasUrl, stageOf, type AsaasClient, type AsaasPayment, type SplitShare } from "./asaas";
+import { AsaasError, customerContact, isAsaasUrl, stageOf, type AsaasClient, type AsaasPayment, type SplitShare } from "./asaas";
 import { NO_LINK } from "./asaas-link";
 import { settleOrDrop } from "./asaas-settle";
+import { onlineAllowed } from "./billing";
 import { shiftDays, todayIn } from "./dates";
 import type { DB } from "./db";
 import { documentKind, onlyDigits } from "./documents";
@@ -25,7 +26,6 @@ export function isPayMethod(value: unknown): value is PayMethod {
 const BILLING = { pix: "PIX", boleto: "BOLETO", cartao: "UNDEFINED" } as const;
 const BOLETO_DAYS = 3;
 const MAX_ATTEMPTS = 3;
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export class NeedsDocumentError extends DomainError {}
 
@@ -54,13 +54,7 @@ async function payerDocument(db: DB, client: typeof clients.$inferSelect, given:
 
 async function customerOf(db: DB, asaas: AsaasClient, client: typeof clients.$inferSelect, document: string): Promise<string> {
   if (client.asaasCustomerId) return client.asaasCustomerId;
-  const phone = onlyDigits(client.whatsapp || client.phone);
-  const id = await asaas.findOrCreateCustomer({
-    name: client.name,
-    cpfCnpj: onlyDigits(document),
-    email: EMAIL.test(client.email) ? client.email : undefined,
-    phone: phone.length === 10 || phone.length === 11 ? phone : undefined,
-  });
+  const id = await asaas.findOrCreateCustomer({ name: client.name, cpfCnpj: onlyDigits(document), ...customerContact(client.email, client.whatsapp || client.phone) });
   await db.update(clients).set({ asaasCustomerId: id }).where(eq(clients.id, client.id));
   return id;
 }
@@ -132,7 +126,7 @@ export async function startCheckout(db: DB, input: { chargeId: string; method: P
   const [client] = await db.select().from(clients).where(and(eq(clients.organizationId, charge.organizationId), eq(clients.id, charge.clientId)));
   if (!org || !client) throw new DomainError("Cobrança não encontrada.");
   const settings: PlatformSettingsRow = await loadPlatformSettings(db);
-  if (!isIntegrated(org, settings)) throw new DomainError("Este link não aceita pagamento pelo Asaas.");
+  if (!isIntegrated(org, settings) || !(await onlineAllowed(db, org, charge, now))) throw new DomainError("Este link não aceita pagamento pelo Asaas.");
   if (charge.status === "cancelada") throw new DomainError("Esta cobrança foi cancelada. Não é preciso pagar.");
   if (org.asaasWalletId.toLowerCase() === settings.asaasWalletId.toLowerCase()) throw new DomainError("A conta Asaas desta empresa é a mesma da plataforma. Conecte outra conta em Recebimentos.");
 

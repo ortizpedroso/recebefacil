@@ -6,7 +6,7 @@ import { can, isRole, type Permission } from "../lib/access";
 import { AsaasError } from "../lib/asaas";
 import { linkMerchantAccount, setReceivingMode, unlinkMerchantAccount } from "../lib/asaas-merchant";
 import { receiveManually, reverseWithAsaas } from "../lib/asaas-settle";
-import { isPlan, payPlatformInvoice, subscribe } from "../lib/billing";
+import { assertCanSell, isPlan } from "../lib/billing";
 import { todayIn } from "../lib/dates";
 import { documentKind, isValidCnpj } from "../lib/documents";
 import { DomainError } from "../lib/errors";
@@ -17,6 +17,7 @@ import { parsePhoto, saveCatalogPhoto } from "../lib/photos";
 import { isPlatformOwner } from "../lib/platform-owner";
 import { generateWebhookToken, parsePlatformForm, savePlatformSettings, testPlatformConnection } from "../lib/platform-settings";
 import { requireSession } from "../lib/session";
+import { cancelPlan, choosePlan } from "../lib/subscription";
 import { catalogSchema, chargeSchema, clientSchema, dueSchema, paymentSchema, saleSchema, toClientInput } from "../lib/schemas";
 import type { z } from "zod";
 import { campaignRecipients, campaigns, catalogItems, clients, fiscalDocuments, members, organizations, sales, supportTickets } from "../lib/schema";
@@ -156,6 +157,7 @@ export async function createSaleAction(raw: unknown) {
   if (!parsed.success) return { ok: false as const, error: parsed.error.issues[0]?.message || "Revise a venda." };
   try {
     const session = await allow("vendas.criar");
+    await assertCanSell(session.db, session.org);
     const { newClient, paidNow } = parsed.data;
     if (newClient && !can(session.role, "clientes.gravar")) throw new DomainError("Seu papel não pode cadastrar clientes.");
     if (paidNow && !can(session.role, "pagamentos.registrar")) throw new DomainError("Seu papel não pode registrar recebimentos.");
@@ -231,6 +233,7 @@ export async function createChargeAction(raw: unknown) {
   if (!parsed.success) return { ok: false as const, error: "Escolha o cliente, o valor e o vencimento." };
   try {
     const { db, org } = await allow("cobrancas.gravar");
+    await assertCanSell(db, org);
     const chargeId = await createCharge(db, org.id, { clientId: parsed.data.clientId, amountCents: priceOf(parsed.data.amount), dueOn: parsed.data.dueOn, method: parsed.data.method });
     refreshMoney();
     return { ok: true as const, chargeId };
@@ -445,23 +448,24 @@ export async function roleAction(memberId: string, role: string) {
   }
 }
 
-export async function subscribeAction(planCode: string) {
+// Contratar leva o lojista à fatura do Asaas. Quem já tem assinatura só troca de plano, ou volta à fatura em aberto.
+export async function subscribeAction(planCode: string, document: string) {
   try {
     const { db, org } = await allow("assinatura.gerir");
     if (!isPlan(planCode)) return { ok: false as const, error: "Plano inválido." };
-    await subscribe(db, org.id, planCode, todayIn(org.timezone));
-    revalidatePath("/assinatura");
-    return { ok: true as const };
+    const choice = await choosePlan(db, org.id, planCode, { document });
+    revalidatePath("/", "layout");
+    return { ok: true as const, ...choice };
   } catch (error) {
     return fail(error);
   }
 }
 
-export async function payPlatformAction(invoiceId: string) {
+export async function cancelPlanAction() {
   try {
     const { db, org } = await allow("assinatura.gerir");
-    await payPlatformInvoice(db, org.id, invoiceId, todayIn(org.timezone));
-    revalidatePath("/assinatura");
+    await cancelPlan(db, org.id);
+    revalidatePath("/", "layout");
     return { ok: true as const };
   } catch (error) {
     return fail(error);

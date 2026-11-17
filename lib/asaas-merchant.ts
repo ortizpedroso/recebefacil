@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { accountOf, AsaasError, createAsaasClient } from "./asaas";
+import { assertCanReceiveOnline } from "./billing";
 import type { DB } from "./db";
 import { DomainError } from "./errors";
 import { loadPlatformSettings, platformReady } from "./platform-settings";
@@ -9,6 +10,7 @@ import { organizations } from "./schema";
 export async function linkMerchantAccount(db: DB, organizationId: string, apiKey: string, fetchImpl?: typeof fetch): Promise<{ accountName: string }> {
   const settings = await loadPlatformSettings(db);
   if (!platformReady(settings)) throw new DomainError("O recebimento pelo Asaas ainda não está disponível.");
+  await assertCanReceiveOnline(db, organizationId);
   const key = apiKey.trim();
   if (key.length < 6) throw new DomainError("Cole a chave de API da sua conta Asaas.");
   const client = createAsaasClient({ apiKey: key, environment: settings.asaasEnvironment, fetch: fetchImpl });
@@ -41,6 +43,7 @@ export async function setReceivingMode(db: DB, organizationId: string, mode: "ge
     const [org] = await db.select().from(organizations).where(eq(organizations.id, organizationId));
     const settings = await loadPlatformSettings(db);
     if (!org?.asaasWalletId || !platformReady(settings)) throw new DomainError("Conecte sua conta Asaas para receber no modo Integrado.");
+    await assertCanReceiveOnline(db, organizationId);
   }
   await db.update(organizations).set({ receivingMode: mode }).where(eq(organizations.id, organizationId));
 }

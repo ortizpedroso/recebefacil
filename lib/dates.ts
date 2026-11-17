@@ -79,6 +79,10 @@ export function whatsAppHref(phone: string, message: string): string {
   return `https://wa.me/${full}?text=${encodeURIComponent(message)}`;
 }
 
+export function daysBetween(from: string, to: string): number {
+  return Math.round((Date.parse(`${to.slice(0, 10)}T00:00:00Z`) - Date.parse(`${from.slice(0, 10)}T00:00:00Z`)) / 86_400_000);
+}
+
 export function daysLate(dueOn: string, today: string): number {
   const due = Date.parse(`${dueOn}T00:00:00Z`);
   const now = Date.parse(`${today}T00:00:00Z`);

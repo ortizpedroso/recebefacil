@@ -1,16 +1,17 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { AsaasError, stageOf, type AsaasClient, type AsaasPayment } from "./asaas";
+import { AsaasError, stageOf, type AsaasClient, type AsaasPayment, type AsaasSubscription } from "./asaas";
 import { forgetLink, settleFromAsaas, undoFromAsaas } from "./asaas-settle";
 import type { DB } from "./db";
 import { logError } from "./log";
 import { checkWebhookToken, loadPlatformSettings, platformClientFor } from "./platform-settings";
 import { asaasWebhookEvents } from "./schema";
+import { subscriptionRoute } from "./subscription-webhook";
 
 export const MAX_WEBHOOK_BYTES = 512 * 1024;
 
-// O que cada evento do Asaas faz. "keep" é de propósito: a cobrança vencida continua viva e a próxima visita decide se a troca.
-export type PaymentEffect = "settle" | "undo" | "forget" | "keep";
+// O que cada evento de cobrança faz. As cobranças dos lojistas só reagem a settle, undo e forget. A fatura do plano também lê o overdue.
+export type PaymentEffect = "settle" | "undo" | "forget" | "overdue";
 
 export const PAYMENT_EVENTS: Record<string, PaymentEffect> = {
   PAYMENT_RECEIVED: "settle",
@@ -21,40 +22,55 @@ export const PAYMENT_EVENTS: Record<string, PaymentEffect> = {
   PAYMENT_AWAITING_CHARGEBACK_REVERSAL: "undo",
   PAYMENT_RECEIVED_IN_CASH_UNDONE: "undo",
   PAYMENT_DELETED: "forget",
-  PAYMENT_OVERDUE: "keep",
+  PAYMENT_OVERDUE: "overdue",
 };
 
-// A tela do dono mostra esta lista: só os eventos que mudam alguma coisa precisam ser ligados no Asaas.
-export const WEBHOOK_EVENTS_TO_ENABLE: string[] = Object.entries(PAYMENT_EVENTS)
-  .filter(([, effect]) => effect !== "keep")
-  .map(([name]) => name);
+// A assinatura acabou: apagada por quem cancelou ou inativada pelo Asaas.
+export const SUBSCRIPTION_EVENTS: readonly string[] = ["SUBSCRIPTION_DELETED", "SUBSCRIPTION_INACTIVATED"];
+
+// A tela do dono mostra esta lista: são os eventos que precisam ser ligados no Asaas.
+export const WEBHOOK_EVENTS_TO_ENABLE: string[] = [...Object.keys(PAYMENT_EVENTS), ...SUBSCRIPTION_EVENTS];
 
 export type PaymentContext = {
+  kind: "payment";
   db: DB;
   effect: PaymentEffect;
   event: string;
   paymentId: string;
-  // Lida de novo no Asaas para settle e undo. O corpo do webhook nunca decide o que foi pago.
+  // Lida de novo no Asaas para settle e undo (e para overdue de fatura do plano). O corpo do webhook nunca decide o que foi pago.
   remote: AsaasPayment | null;
   now: Date;
 };
 
+export type SubscriptionContext = {
+  kind: "subscription";
+  db: DB;
+  event: string;
+  subscriptionId: string;
+  // Nula quando o Asaas já não conhece a assinatura.
+  remote: AsaasSubscription | null;
+  now: Date;
+};
+
+export type WebhookContext = PaymentContext | SubscriptionContext;
+
 // Cada rota cuida de um tipo de cobrança, escolhido pelo começo do externalReference.
-// A unidade de assinaturas acrescenta aqui { prefix: "sub:", handle }. Sem rota para um prefixo reservado, o evento é ignorado.
-export type PaymentRoute = { prefix: string | null; handle(context: PaymentContext): Promise<void> };
+export type PaymentRoute = { prefix: string | null; handle(context: WebhookContext): Promise<void> };
 
 export const RESERVED_PREFIXES = ["sub:"];
 
 export const chargeRoute: PaymentRoute = {
   prefix: null,
-  async handle({ db, effect, paymentId, remote, now }) {
+  async handle(context) {
+    if (context.kind !== "payment") return;
+    const { db, effect, paymentId, remote, now } = context;
     if (effect === "settle" && remote && stageOf(remote.status) === "paid") await settleFromAsaas(db, remote, now);
     if (effect === "undo" && remote) await undoFromAsaas(db, remote);
     if (effect === "forget") await forgetLink(db, paymentId);
   },
 };
 
-export const PAYMENT_ROUTES: PaymentRoute[] = [chargeRoute];
+export const PAYMENT_ROUTES: PaymentRoute[] = [chargeRoute, subscriptionRoute];
 
 export function routeFor(reference: string | null | undefined): PaymentRoute | null {
   const prefixed = PAYMENT_ROUTES.find((route) => route.prefix !== null && (reference ?? "").startsWith(route.prefix));
@@ -67,6 +83,7 @@ const bodySchema = z.object({
   id: z.string().min(1).max(200),
   event: z.string().min(1).max(100),
   payment: z.object({ id: z.string().min(1), externalReference: z.string().nullish() }).optional(),
+  subscription: z.object({ id: z.string().min(1), externalReference: z.string().nullish() }).optional(),
 });
 
 const reply = (status: number, body: Record<string, string>) => Response.json(body, { status });
@@ -112,35 +129,55 @@ export async function handleAsaasWebhook(request: Request, deps: WebhookDeps): P
   }
 
   const effect = PAYMENT_EVENTS[parsed.event];
-  if (!effect || !parsed.payment) return reply(200, { status: "ignorado" });
+  const paymentEvent = effect && parsed.payment ? { effect, payment: parsed.payment } : null;
+  const subscriptionEvent = SUBSCRIPTION_EVENTS.includes(parsed.event) && parsed.subscription ? { subscription: parsed.subscription } : null;
+  if (!paymentEvent && !subscriptionEvent) return reply(200, { status: "ignorado" });
 
   const [seen] = await db.select({ id: asaasWebhookEvents.id }).from(asaasWebhookEvents).where(eq(asaasWebhookEvents.id, parsed.id));
   if (seen) return reply(200, { status: "duplicado" });
 
   const now = deps.now ?? new Date();
-  const paymentId = parsed.payment.id;
   try {
-    let remote: AsaasPayment | null = null;
-    if (effect === "settle" || effect === "undo") {
-      const client: AsaasClient = platformClientFor(settings, deps.fetch);
-      try {
-        remote = await client.getPayment(paymentId);
-      } catch (error) {
-        if (error instanceof AsaasError && error.kind === "notfound") return reply(200, { status: "ignorado" });
-        throw error;
+    const asaas = (): AsaasClient => platformClientFor(settings, deps.fetch);
+    let remotePayment: AsaasPayment | null = null;
+    let remoteSubscription: AsaasSubscription | null = null;
+    let reference: string | null | undefined;
+    if (paymentEvent) {
+      const bodyReference = paymentEvent.payment.externalReference;
+      // Vencida só importa para a fatura do plano: ler o Asaas a cada cobrança vencida de lojista seria trabalho à toa.
+      const reads = paymentEvent.effect === "settle" || paymentEvent.effect === "undo" || (paymentEvent.effect === "overdue" && RESERVED_PREFIXES.some((prefix) => (bodyReference ?? "").startsWith(prefix)));
+      if (reads) {
+        try {
+          remotePayment = await asaas().getPayment(paymentEvent.payment.id);
+        } catch (error) {
+          if (error instanceof AsaasError && error.kind === "notfound") return reply(200, { status: "ignorado" });
+          throw error;
+        }
       }
+      reference = remotePayment?.externalReference ?? bodyReference;
+    } else if (subscriptionEvent) {
+      try {
+        remoteSubscription = await asaas().getSubscription(subscriptionEvent.subscription.id);
+      } catch (error) {
+        if (!(error instanceof AsaasError && error.kind === "notfound")) throw error;
+      }
+      reference = remoteSubscription?.externalReference ?? subscriptionEvent.subscription.externalReference;
     }
-    const route = routeFor(remote?.externalReference ?? parsed.payment.externalReference);
+    const route = routeFor(reference);
     if (!route) return reply(200, { status: "ignorado" });
     const outcome = await db.transaction(async (transaction) => {
       const tx = transaction as DB;
       const [inserted] = await tx
         .insert(asaasWebhookEvents)
-        .values({ id: parsed.id, event: parsed.event, paymentId, receivedAt: now.toISOString(), processedAt: null })
+        .values({ id: parsed.id, event: parsed.event, paymentId: parsed.payment?.id ?? null, receivedAt: now.toISOString(), processedAt: null })
         .onConflictDoNothing()
         .returning({ id: asaasWebhookEvents.id });
       if (!inserted) return "duplicado";
-      await route.handle({ db: tx, effect, event: parsed.event, paymentId, remote, now });
+      if (paymentEvent) {
+        await route.handle({ kind: "payment", db: tx, effect: paymentEvent.effect, event: parsed.event, paymentId: paymentEvent.payment.id, remote: remotePayment, now });
+      } else if (subscriptionEvent) {
+        await route.handle({ kind: "subscription", db: tx, event: parsed.event, subscriptionId: subscriptionEvent.subscription.id, remote: remoteSubscription, now });
+      }
       await tx.update(asaasWebhookEvents).set({ processedAt: new Date().toISOString() }).where(eq(asaasWebhookEvents.id, parsed.id));
       return "ok";
     });

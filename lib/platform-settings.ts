@@ -7,7 +7,7 @@ import { decryptSecret, encryptSecret, safeEqual, SecretUnreadableError } from "
 import type { DB } from "./db";
 import { DomainError } from "./errors";
 import { parsePercentBp, parseReais } from "./money";
-import { charges, clients, organizations, platformSettings } from "./schema";
+import { charges, clients, organizations, platformInvoices, platformSettings, subscriptions } from "./schema";
 import { CHARGE_STATES } from "./status";
 
 export type PlatformSettingsRow = typeof platformSettings.$inferSelect;
@@ -132,6 +132,10 @@ async function forgetAsaasWorld(tx: DB) {
     .set(NO_LINK)
     .where(and(isNotNull(charges.asaasPaymentId), inArray(charges.status, [...OPEN_STATUSES])));
   await tx.update(organizations).set({ receivingMode: "gestao", asaasWalletId: "", asaasAccountName: "" }).where(ne(organizations.asaasWalletId, ""));
+  await tx.update(organizations).set({ asaasCustomerId: null }).where(isNotNull(organizations.asaasCustomerId));
+  // Assinatura e faturas do plano também moram no Asaas de antes. O acesso segue até o fim do que foi pago, e o lojista contrata de novo.
+  await tx.update(subscriptions).set({ asaasSubscriptionId: null, status: "cancelada" }).where(isNotNull(subscriptions.asaasSubscriptionId));
+  await tx.update(platformInvoices).set({ status: "cancelada" }).where(inArray(platformInvoices.status, ["aberta", "vencida"]));
 }
 
 export async function savePlatformSettings(db: DB, input: PlatformSettingsInput, updatedBy: string, now: Date = new Date()): Promise<void> {

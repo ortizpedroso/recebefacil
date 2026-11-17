@@ -322,6 +322,12 @@ create table if not exists asaas_webhook_events (
   received_at text not null,
   processed_at text
 );
+alter table organizations add column if not exists asaas_customer_id text;
+alter table subscriptions add column if not exists asaas_subscription_id text;
+alter table platform_invoices add column if not exists asaas_payment_id text;
+alter table platform_invoices add column if not exists invoice_url text;
+create unique index if not exists subscriptions_asaas_subscription on subscriptions (asaas_subscription_id) where asaas_subscription_id is not null;
+create unique index if not exists platform_invoices_asaas_payment on platform_invoices (asaas_payment_id) where asaas_payment_id is not null;
 `;
 
 // Blocos com ponto e vírgula interno rodam inteiros, na ordem, depois do SCHEMA_SQL.
@@ -360,4 +366,13 @@ export const MIGRATION_STATEMENTS = [
   `update catalog_items set kind = 'mensalidade' where billing = 'recorrente' and kind <> 'mensalidade'`,
   `update catalog_items set billing = 'recorrente' where kind = 'mensalidade' and billing <> 'recorrente'`,
   `update catalog_items set billing = 'pontual' where kind <> 'mensalidade' and billing <> 'pontual'`,
+  // A assinatura de mentira tinha outros planos e o status "trial". Os dois planos reais são gestao e integrado.
+  `update subscriptions set status = 'teste' where status = 'trial'`,
+  `update subscriptions set plan_code = 'gestao' where plan_code not in ('gestao', 'integrado')`,
+  // Empresa criada antes dos planos reais ganha um teste de 14 dias a partir de agora. A demonstração pública não assina.
+  `insert into subscriptions (id, organization_id, plan_code, status, trial_ends_on, period_ends_on)
+    select gen_random_uuid()::text, o.id, 'gestao', 'teste', to_char(current_date + 14, 'YYYY-MM-DD'), to_char(current_date + 14, 'YYYY-MM-DD')
+    from organizations o
+    where o.viewer_key <> 'public:demonstracao' and not exists (select 1 from subscriptions s where s.organization_id = o.id)`,
+  bestEffortUnique("create unique index if not exists subscriptions_organization on subscriptions (organization_id)"),
 ];

@@ -105,6 +105,37 @@ export function stageOf(status: string): PaymentStage {
   return STAGE_BY_STATUS[status] ?? "unknown";
 }
 
+const subscriptionSchema = z
+  .object({
+    id: z.string().min(1),
+    customer: text,
+    value: z.number(),
+    status: z.string(),
+    nextDueDate: text,
+    description: text,
+    externalReference: text,
+    deleted: z.boolean().nullish(),
+  })
+  .transform((raw) => ({
+    id: raw.id,
+    customerId: raw.customer ?? null,
+    valueCents: fromReais(raw.value),
+    status: raw.status,
+    nextDueDate: raw.nextDueDate ?? null,
+    description: raw.description ?? "",
+    externalReference: raw.externalReference ?? null,
+    deleted: raw.deleted ?? false,
+  }));
+
+export type AsaasSubscription = z.output<typeof subscriptionSchema>;
+
+// Assinatura inativa, expirada ou apagada não cobra mais ninguém.
+export function subscriptionLive(subscription: Pick<AsaasSubscription, "status" | "deleted">): boolean {
+  return !subscription.deleted && subscription.status === "ACTIVE";
+}
+
+const subscriptionListSchema = z.object({ data: z.array(subscriptionSchema) });
+const paymentListSchema = z.object({ data: z.array(paymentSchema) });
 const walletsSchema = z.object({ data: z.array(z.object({ id: z.string().min(1) })) });
 const accountSchema = z.object({ name: text, company: text, tradingName: text, walletId: text });
 const customerSchema = z.object({ id: z.string().min(1) });
@@ -126,6 +157,7 @@ export type NewPayment = {
   externalReference: string;
   split: SplitShare[];
 };
+export type NewSubscription = { customer: string; valueCents: Cents; nextDueDate: string; description: string; externalReference: string };
 export type NewCustomer = { name: string; cpfCnpj: string; email?: string; phone?: string };
 
 export type AsaasDeps = {
@@ -225,6 +257,7 @@ export function createAsaasClient(deps: AsaasDeps) {
   }
 
   const paymentPath = (id: string) => `/payments/${encodeURIComponent(id)}`;
+  const subscriptionPath = (id: string) => `/subscriptions/${encodeURIComponent(id)}`;
 
   return {
     async getMyAccount(): Promise<{ name: string; walletId: string | null }> {
@@ -292,10 +325,64 @@ export function createAsaasClient(deps: AsaasDeps) {
     async deletePayment(id: string): Promise<void> {
       await request({ method: "DELETE", path: paymentPath(id) }, deletedSchema);
     },
+
+    // O pagador escolhe Pix, boleto ou cartão na fatura do Asaas, por isso o tipo fica em UNDEFINED.
+    createSubscription(input: NewSubscription): Promise<AsaasSubscription> {
+      return request(
+        {
+          method: "POST",
+          path: "/subscriptions",
+          body: {
+            customer: input.customer,
+            billingType: "UNDEFINED",
+            value: toReais(input.valueCents),
+            nextDueDate: input.nextDueDate,
+            cycle: "MONTHLY",
+            description: input.description.slice(0, 500),
+            externalReference: input.externalReference,
+          },
+        },
+        subscriptionSchema,
+      );
+    },
+
+    // updatePendingPayments leva o novo valor também para a fatura que ainda não foi paga.
+    updateSubscription(id: string, input: { valueCents: Cents; description: string }): Promise<AsaasSubscription> {
+      return request(
+        { method: "POST", path: subscriptionPath(id), body: { value: toReais(input.valueCents), description: input.description.slice(0, 500), updatePendingPayments: true } },
+        subscriptionSchema,
+      );
+    },
+
+    getSubscription(id: string): Promise<AsaasSubscription> {
+      return request({ method: "GET", path: subscriptionPath(id) }, subscriptionSchema);
+    },
+
+    async deleteSubscription(id: string): Promise<void> {
+      await request({ method: "DELETE", path: subscriptionPath(id) }, deletedSchema);
+    },
+
+    async listSubscriptionPayments(id: string): Promise<AsaasPayment[]> {
+      return (await request({ method: "GET", path: `${subscriptionPath(id)}/payments`, query: { limit: "100" } }, paymentListSchema)).data;
+    },
+
+    async findSubscriptions(externalReference: string): Promise<AsaasSubscription[]> {
+      const found = await request({ method: "GET", path: "/subscriptions", query: { externalReference, limit: "20" } }, subscriptionListSchema);
+      // Se o Asaas ignorar o filtro, o que não é desta referência não entra.
+      return found.data.filter((subscription) => subscription.externalReference === externalReference);
+    },
   };
 }
 
 export type AsaasClient = ReturnType<typeof createAsaasClient>;
+
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// O Asaas recusa e-mail e telefone mal formados: o que não serve fica de fora em vez de derrubar o cadastro.
+export function customerContact(email: string, phone: string): { email?: string; phone?: string } {
+  const digits = phone.replace(/\D/g, "");
+  return { ...(EMAIL.test(email) ? { email } : {}), ...(digits.length === 10 || digits.length === 11 ? { phone: digits } : {}) };
+}
 
 // Conta e carteira de uma chave. A carteira decide para onde o split manda o dinheiro, então ela é obrigatória.
 export async function accountOf(client: AsaasClient): Promise<{ name: string; walletId: string }> {

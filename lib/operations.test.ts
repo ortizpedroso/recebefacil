@@ -4,12 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { eq } from "drizzle-orm";
-import { payPlatformInvoice, subscribe } from "./billing";
 import { openIsolatedDatabase } from "./db";
 import { DomainError, createSale } from "./ledger";
 import { cents } from "./money";
 import { bucketCounts, listReceivables } from "./receivables";
-import { catalogItems, charges, organizations, platformInvoices, sales } from "./schema";
+import { catalogItems, charges, organizations, sales } from "./schema";
 import { insertCatalog, insertClient } from "./tenant";
 
 async function org() {
@@ -78,17 +77,6 @@ test("a venda de produto baixa o estoque e recusa quantidade maior", async () =>
   await createSale(db, organizationId, { ...sale, items: [{ catalogItemId: itemId, description: "Peça", kind: "produto", quantity: 1, unitCents: cents(1000) }] });
   const [item] = await db.select().from(catalogItems).where(eq(catalogItems.id, itemId));
   assert.equal(item?.stockQuantity, 0);
-});
-
-test("assinar o plano abre fatura e o pagamento fecha o período", async () => {
-  const { db, organizationId } = await org();
-  const invoiceId = await subscribe(db, organizationId, "profissional", "2026-11-16");
-  const [open] = await db.select().from(platformInvoices).where(eq(platformInvoices.id, invoiceId));
-  assert.equal(open?.status, "aberta");
-  assert.equal(open?.amountCents, 19_900);
-  await payPlatformInvoice(db, organizationId, invoiceId, "2026-11-16");
-  const [paid] = await db.select().from(platformInvoices).where(eq(platformInvoices.id, invoiceId));
-  assert.equal(paid?.status, "paga");
 });
 
 test("parcelas passam para a página seguinte", async () => {
