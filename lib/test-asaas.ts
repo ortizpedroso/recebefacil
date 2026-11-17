@@ -3,7 +3,7 @@ import type { DB } from "./db";
 import { createCharge } from "./ledger";
 import { cents } from "./money";
 import { generateWebhookToken, savePlatformSettings } from "./platform-settings";
-import { charges, clients, organizations, platformSettings } from "./schema";
+import { charges, clients, organizations, platformSettings, subscriptions } from "./schema";
 import { addClient, addOrganization } from "./test-support";
 
 // Asaas de mentira para os testes: guarda as cobranças na memória e registra cada chamada recebida.
@@ -265,6 +265,8 @@ export async function integratedCharge(db: DB, id: string, options: { amountCent
   const org = await addOrganization(db, id);
   if (options.integrated !== false) {
     await db.update(organizations).set({ receivingMode: "integrado", asaasWalletId: MERCHANT_WALLET, asaasAccountName: "Loja" }).where(eq(organizations.id, org));
+    // Lojista no plano Integrado em dia, para os testes de cobrança não dependerem da data em que rodam.
+    await db.insert(subscriptions).values({ id: `sub-${org}`, organizationId: org, planCode: "integrado", status: "ativa", trialEndsOn: "2026-01-01", periodEndsOn: "2099-01-01" });
   }
   const client = await addClient(db, org, "Maria Souza");
   await db.update(clients).set({ document: options.document ?? VALID_CPF, email: "maria@exemplo.com" }).where(eq(clients.id, client));

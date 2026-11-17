@@ -11,7 +11,8 @@ const LINKS = [
   { href: "/recebimentos", title: "Recebimentos", hint: "Como você recebe: Gestão ou Integrado com Asaas, chave Pix e instruções" },
   { href: "/configuracoes", title: "Minha empresa", hint: "Nome, CNPJ, fuso horário, multa e juros por atraso" },
   { href: "/equipe", title: "Equipe", hint: "Convidar pessoas e definir o que cada uma pode fazer" },
-  { href: "/assinatura", title: "Plano", hint: "Seu plano do RecebeFácil" },
+  { href: "/assinatura", title: "Plano", hint: "Seu plano, teste grátis e mensalidades" },
+  { href: "/planos", title: "O que o RecebeFácil faz", hint: "Página com os planos e as perguntas frequentes, boa para mostrar a outras pessoas" },
   { href: "/ajuda", title: "Ajuda", hint: "Perguntas frequentes e fale com o suporte" },
 ];
 

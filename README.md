@@ -48,10 +48,39 @@ A cobrança é criada na conta Asaas da plataforma. Um split manda para a cartei
 3. Comece pelo ambiente Sandbox. Crie uma conta em `https://sandbox.asaas.com`, gere uma chave de API e cole no campo Chave de API.
 4. Clique em Gerar token, copie o token que aparece (ele só aparece uma vez) e salve.
 5. Clique em Testar conexão. O app consulta a conta, guarda a carteira da plataforma e mostra o nome da conta e o ambiente. Os lojistas só veem o modo Integrado quando chave, token e carteira estão prontos.
-6. No Asaas, abra Configurações da conta, Integrações, Webhooks e crie um webhook de cobranças. Use o endereço mostrado na página (`<seu domínio>/api/webhooks/asaas`), o token do passo 4, fila sequencial, e ative os eventos listados na página (`PAYMENT_RECEIVED`, `PAYMENT_CONFIRMED`, estornos, chargebacks, `PAYMENT_RECEIVED_IN_CASH_UNDONE` e `PAYMENT_DELETED`).
+6. No Asaas, abra Configurações da conta, Integrações, Webhooks e crie um webhook de cobranças e assinaturas. Use o endereço mostrado na página (`<seu domínio>/api/webhooks/asaas`), o token do passo 4, fila sequencial, e ative os eventos listados na página (veja a lista completa em Planos e assinatura abaixo).
 7. Para ir à produção, troque o ambiente, cole a chave de produção, gere um novo token, atualize o webhook no Asaas de produção e teste a conexão de novo. Trocar de ambiente solta as cobranças ainda abertas, os clientes do Asaas e as contas ligadas pelos lojistas, que precisam conectar de novo com chave de produção.
 
-A taxa (0% a 20%) e os preços dos planos também ficam nessa página.
+A taxa (0% a 20%) e os preços dos planos também ficam nessa página, junto com a lista de assinantes (empresa, plano, situação e próximo vencimento).
+
+### Planos e assinatura
+
+O RecebeFácil cobra uma mensalidade de cada lojista, pela mesma conta Asaas da plataforma.
+
+| Plano | O que é | Preço |
+| --- | --- | --- |
+| Gestão | O lojista recebe do jeito dele e marca Recebi. Só a mensalidade. | `plan_gestao_cents` |
+| Integrado | O cliente paga por Pix, boleto ou cartão e a baixa é automática. Mensalidade mais a taxa da plataforma por pagamento recebido pelo sistema. | `plan_integrado_cents` mais `platform_fee_bp` |
+
+Os preços e a taxa são editados em Mais, Plataforma. A página pública `/planos` (sem login) mostra os dois planos com esses valores, e o botão Contratar leva a `/assinatura?plano=gestao` ou `/assinatura?plano=integrado`.
+
+**Teste grátis.** Toda empresa nova ganha 14 dias de teste, com tudo liberado, criado junto com a empresa. A demonstração pública não tem plano. Empresas criadas antes dos planos ganham o teste na migração.
+
+**Contratar.** O lojista informa o CPF ou CNPJ da empresa (se faltar) e confirma. O app cria o cliente no Asaas (`organizations.asaas_customer_id`) e uma assinatura mensal na conta da plataforma (`POST /subscriptions`, `billingType` `UNDEFINED`, `externalReference` `sub:<id da empresa>`), e leva o lojista à fatura do Asaas, onde ele escolhe Pix, boleto ou cartão. Trocar de plano muda o valor da mesma assinatura. Cancelar apaga a assinatura no Asaas, e o acesso segue até o fim do período pago.
+
+**Situações.** `teste`, `aguardando_pagamento`, `ativa`, `inadimplente` e `cancelada`, lidas por `accessFor` junto com a data de hoje. Sem plano ativo, o teste vencido, a mensalidade em atraso depois do período pago e o plano cancelado depois do período bloqueiam só a criação de venda e de cobrança nova (aparece um aviso no topo com o botão Ver planos). Ver tudo, dar baixa, desfazer, recibos, links já enviados e o webhook continuam funcionando: o dinheiro do lojista nunca fica preso. O modo Integrado exige o plano Integrado em dia ou o teste ativo. Quem cai para Gestão mantém os links de pagamento já gerados, mas não gera novos pelo Asaas.
+
+**Eventos do webhook** (o app só aceita estes, o resto é ignorado):
+
+| Evento | Efeito na mensalidade |
+| --- | --- |
+| `PAYMENT_RECEIVED`, `PAYMENT_CONFIRMED` | Fatura paga, plano `ativa`, fim do período no vencimento mais um mês |
+| `PAYMENT_OVERDUE` | Plano `inadimplente` |
+| `PAYMENT_REFUNDED`, `PAYMENT_CHARGEBACK_REQUESTED`, `PAYMENT_CHARGEBACK_DISPUTE`, `PAYMENT_AWAITING_CHARGEBACK_REVERSAL`, `PAYMENT_RECEIVED_IN_CASH_UNDONE` | Fatura estornada, e `inadimplente` se nenhum outro período pago cobrir hoje |
+| `PAYMENT_DELETED` | Fatura em aberto marcada como cancelada |
+| `SUBSCRIPTION_DELETED`, `SUBSCRIPTION_INACTIVATED` | Plano `cancelada`, com acesso até o fim do período pago |
+
+Os mesmos eventos de `PAYMENT_*` já servem às cobranças dos lojistas. O prefixo `sub:` do `externalReference` separa as duas coisas. O corpo do evento só aponta a empresa: o que foi pago é sempre lido de novo no Asaas, e cada evento é gravado junto com o seu efeito, então repetições não contam duas vezes. Abrir Plano depois de pagar também confere as faturas no Asaas, o que cobre um webhook perdido.
 
 ### Conciliação
 

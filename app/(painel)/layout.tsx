@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { Shell, type ShellAlert, type ShellSearch } from "@/components/shell";
 import { money } from "@/components/ui";
+import { loadAccess } from "@/lib/billing";
 import { formatDateBR, todayIn } from "@/lib/dates";
 import { advanceRecurrences } from "@/lib/ledger";
 import { alertRows } from "@/lib/receivables";
@@ -13,10 +14,11 @@ export default async function PainelLayout({ children }: { children: React.React
   const { db, org } = session;
   const today = todayIn(org.timezone);
   await advanceRecurrences(db, org.id, today);
-  const [people, saleRows, alertData] = await Promise.all([
+  const [people, saleRows, alertData, { access }] = await Promise.all([
     db.select({ id: clients.id, name: clients.name, document: clients.document, phone: clients.whatsapp }).from(clients).where(eq(clients.organizationId, org.id)),
     db.select({ id: sales.id, code: sales.code, clientId: sales.clientId, total: sales.totalCents }).from(sales).where(eq(sales.organizationId, org.id)),
     alertRows(db, org.id, today),
+    loadAccess(db, org),
   ]);
   const names = new Map(people.map((client) => [client.id, client.name]));
   const search: ShellSearch[] = [
@@ -64,6 +66,7 @@ export default async function PainelLayout({ children }: { children: React.React
       lateCount={alertData.lateCount}
       search={search}
       alerts={alerts}
+      plan={{ banner: access.banner ?? null, blocked: !access.canSell }}
     >
       {children}
     </Shell>

@@ -152,7 +152,7 @@ export function PlatformForm({ view, webhookUrl, events }: { view: PlatformSetti
 
       <Card className="space-y-3">
         <h2 className="font-bold text-slate-900">Webhook no Asaas</h2>
-        <p className="text-sm text-slate-600">No Asaas, abra Configurações da conta, Integrações, Webhooks e crie um webhook de cobranças com o endereço e o token abaixo. Deixe a fila sequencial e ative os eventos listados.</p>
+        <p className="text-sm text-slate-600">No Asaas, abra Configurações da conta, Integrações, Webhooks e crie um webhook de cobranças e assinaturas com o endereço e o token abaixo. Deixe a fila sequencial e ative os eventos listados. Os de assinatura (SUBSCRIPTION) valem para a mensalidade dos lojistas.</p>
         <div className="flex gap-2">
           <input readOnly value={webhookUrl} aria-label="Endereço do webhook" className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800" />
           <CopyButton text={webhookUrl} className={secondaryButtonClass} doneMessage="Endereço copiado">

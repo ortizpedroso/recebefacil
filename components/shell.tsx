@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import { Bell, ChevronDown, Home, MoreHorizontal, Package, Plus, RotateCcw, Search, ShoppingCart, UserCheck, Users, Wallet, X } from "lucide-react";
+import { AlertTriangle, Bell, ChevronDown, Home, MoreHorizontal, Package, Plus, RotateCcw, Search, ShoppingCart, UserCheck, Users, Wallet, X } from "lucide-react";
 import { resetDemoAction } from "@/app/actions";
 import { normalize } from "@/lib/text";
 import { Modal } from "./dialog";
@@ -47,6 +47,8 @@ const ROUTE_LABELS: [string, string][] = [
 ];
 
 export type ShellSearch = { kind: string; title: string; subtitle: string; href: string; haystack: string };
+// Quando o plano não deixa criar venda, o botão Nova venda leva ao plano e o aviso fica no topo.
+export type ShellPlan = { banner: string | null; blocked: boolean };
 export type ShellAlert = { id: string; tone: "late" | "soon"; label: string; amount: string; detail: string; href: string };
 
 export function Shell({
@@ -59,6 +61,7 @@ export function Shell({
   lateCount,
   search,
   alerts,
+  plan,
   children,
 }: {
   company: string;
@@ -70,6 +73,7 @@ export function Shell({
   lateCount: number;
   search: ShellSearch[];
   alerts: ShellAlert[];
+  plan: ShellPlan;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -93,6 +97,9 @@ export function Shell({
     if (href === "/mais") return MORE_PAGES.some((page) => pathname === page || pathname.startsWith(`${page}/`));
     return pathname === href || pathname.startsWith(`${href}/`);
   }
+
+  const newSaleHref = plan.blocked ? "/assinatura" : "/vendas/nova";
+  const showBanner = Boolean(plan.banner) && !pathname.startsWith("/assinatura");
 
   const itemClass = (href: string) =>
     active(href) ? "bg-teal-50 text-teal-800 font-semibold" : "text-slate-600 hover:bg-slate-100/80 hover:text-slate-900 font-medium";
@@ -153,7 +160,7 @@ export function Shell({
           </Link>
         </div>
         <div className="px-3">
-          <Link href="/vendas/nova" className={`${buttonClass} w-full`}>
+          <Link href={newSaleHref} className={`${buttonClass} w-full`}>
             <Plus className="h-4 w-4" />
             Nova venda
           </Link>
@@ -277,13 +284,24 @@ export function Shell({
             </>
           )}
         </header>
+        {showBanner ? (
+          <div role="status" className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b px-4 py-2.5 text-sm sm:px-6 print:hidden ${plan.blocked ? "border-rose-200 bg-rose-50 text-rose-800" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+            <span className="flex min-w-0 items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>{plan.banner}</span>
+            </span>
+            <Link href="/assinatura" className="shrink-0 rounded-lg bg-white px-3 py-1.5 text-[13px] font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50">
+              Ver planos
+            </Link>
+          </div>
+        ) : null}
         <main className="mx-auto w-full max-w-[1120px] flex-1 px-4 pb-28 pt-5 sm:px-6 sm:pt-6 md:pb-10 print:max-w-none print:p-0">{children}</main>
       </div>
 
       <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-slate-200 bg-white px-1 pb-[max(0.375rem,env(safe-area-inset-bottom))] pt-1.5 md:hidden print:hidden" aria-label="Menu">
         <BottomLink href="/" label="Início" icon={Home} on={active("/")} />
         <BottomLink href="/receber" label="A receber" icon={Wallet} on={active("/receber")} badge={lateCount} />
-        <Link href="/vendas/nova" className="relative flex flex-col items-center gap-0.5 text-[11px] font-semibold text-teal-800">
+        <Link href={newSaleHref} className="relative flex flex-col items-center gap-0.5 text-[11px] font-semibold text-teal-800">
           <span className="-mt-5 flex h-12 w-12 items-center justify-center rounded-full bg-teal-700 text-white shadow-lg">
             <Plus className="h-6 w-6" />
           </span>

@@ -99,7 +99,7 @@ test("empresa de antes dos planos ganha o teste na primeira leitura, uma vez só
 async function expire(db: Awaited<ReturnType<typeof database>>, organizationId: string) {
   const [org] = await db.select().from(organizations).where(eq(organizations.id, organizationId));
   await loadSubscription(db, org, NOW);
-  await db.update(subscriptions).set({ trialEndsOn: "2026-10-01", periodEndsOn: "2026-10-01" }).where(eq(subscriptions.organizationId, organizationId));
+  await db.update(subscriptions).set({ status: "teste", trialEndsOn: "2026-10-01", periodEndsOn: "2026-10-01" }).where(eq(subscriptions.organizationId, organizationId));
   return org;
 }
 

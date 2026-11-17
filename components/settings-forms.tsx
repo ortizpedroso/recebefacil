@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useState } from "react";
 import { companyAction, connectAsaasAction, disconnectAsaasAction, inviteAction, receivingAction, roleAction, supportAction } from "@/app/actions";
 import { roleLabel, roles } from "@/lib/access";
@@ -80,7 +81,8 @@ export function CompanyForm({ company }: { company: { tradeName: string; legalNa
   );
 }
 
-export type ReceivingOffer = { available: boolean; feeBp: number; environment: "sandbox" | "producao" };
+// planAllowed é falso para quem está no plano Gestão: o modo Integrado fica explicado e com o caminho para trocar de plano.
+export type ReceivingOffer = { available: boolean; planAllowed: boolean; feeBp: number; environment: "sandbox" | "producao" };
 export type ReceivingLink = { accountName: string; walletTail: string } | null;
 
 const ASAAS_SIGNUP = { sandbox: "https://sandbox.asaas.com/", producao: "https://www.asaas.com/" } as const;
@@ -93,7 +95,8 @@ export function ReceivingForm({ pixKey, instructions, initialMode, link, offer }
   const [apiKey, setApiKey] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [replacing, setReplacing] = useState(false);
-  const integratedOn = mode === "integrado";
+  const usable = offer.available && offer.planAllowed;
+  const integratedOn = mode === "integrado" && usable;
   const card = (on: boolean) => `flex cursor-pointer items-start gap-3 rounded-xl border-[1.5px] p-3 ${on ? "border-teal-700 bg-teal-50" : "border-[#E2E8F0]"}`;
 
   async function connect() {
@@ -150,18 +153,30 @@ export function ReceivingForm({ pixKey, instructions, initialMode, link, offer }
             <span className="block text-[13px] text-slate-600">Seu cliente paga como você combinar (Pix, dinheiro, transferência) e você marca Recebi.</span>
           </span>
         </label>
-        <label className={`${card(integratedOn)} ${offer.available ? "" : "cursor-not-allowed bg-slate-50 opacity-80"}`}>
-          <input type="radio" name="mode" value="integrado" className="mt-1 accent-teal-700" checked={integratedOn} disabled={!offer.available} onChange={() => setMode("integrado")} />
+        <label className={`${card(integratedOn)} ${usable ? "" : "cursor-not-allowed bg-slate-50 opacity-80"}`}>
+          <input type="radio" name="mode" value="integrado" className="mt-1 accent-teal-700" checked={integratedOn} disabled={!usable} onChange={() => setMode("integrado")} />
           <span>
             <span className="block font-semibold text-slate-900">
-              Integrado {offer.available ? null : <span className="ml-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">Ainda indisponível</span>}
+              Integrado {!offer.available ? <span className="ml-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">Ainda indisponível</span> : null}
+              {offer.available && !offer.planAllowed ? <span className="ml-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">Plano Integrado</span> : null}
             </span>
             <span className="block text-[13px] text-slate-600">Pix, boleto e cartão pelo Asaas, com baixa automática quando o cliente paga. Você ainda pode marcar Recebi.</span>
           </span>
         </label>
       </fieldset>
 
-      {integratedOn && offer.available ? (
+      {offer.available && !offer.planAllowed ? (
+        <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <p>
+            O modo Integrado faz parte do plano Integrado. No plano Gestão você continua recebendo do seu jeito e marcando Recebi. {initialMode === "integrado" ? "Seus clientes não conseguem mais gerar Pix, boleto ou cartão novos pelo link, e o que já foi gerado segue valendo." : ""}
+          </p>
+          <Link href="/assinatura?plano=integrado#confirmar" className={buttonClass}>
+            Conhecer o plano Integrado
+          </Link>
+        </div>
+      ) : null}
+
+      {integratedOn && usable ? (
         <div className="space-y-3 rounded-xl border border-[#E2E8F0] bg-slate-50 p-4">
           <p className="text-sm text-slate-700">Você recebe direto na sua conta Asaas. A plataforma fica com {formatPercent(offer.feeBp)}% de cada pagamento.</p>
           {offer.environment === "sandbox" ? <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">Ambiente de testes: use uma conta e uma chave do sandbox. Nenhum dinheiro de verdade se move.</p> : null}
