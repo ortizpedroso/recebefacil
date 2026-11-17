@@ -6,6 +6,8 @@ export const permissions = [
   "catalogo.gravar",
   "vendas.criar",
   "vendas.cancelar",
+  "vendas.editar",
+  "vendas.excluir",
   "pagamentos.registrar",
   "pagamentos.estornar",
   "contratos.alterar",
@@ -17,6 +19,7 @@ export const permissions = [
   "estoque.ajustar",
   "mensagens.enviar",
   "cobrancas.contatar",
+  "cobrancas.gravar",
   "suporte.abrir",
   "relatorios.ler",
   "demo.resetar",
@@ -26,8 +29,8 @@ export type Permission = (typeof permissions)[number];
 
 const grants: Record<Role, readonly Permission[] | "*"> = {
   administrador: "*",
-  financeiro: ["pagamentos.registrar", "pagamentos.estornar", "relatorios.ler", "fiscal.emitir", "contratos.alterar", "recorrencias.alterar", "suporte.abrir", "assinatura.gerir", "cobrancas.contatar"],
-  vendedor: ["clientes.gravar", "vendas.criar", "vendas.cancelar", "catalogo.gravar", "mensagens.enviar", "suporte.abrir", "estoque.ajustar", "cobrancas.contatar"],
+  financeiro: ["pagamentos.registrar", "pagamentos.estornar", "relatorios.ler", "fiscal.emitir", "contratos.alterar", "recorrencias.alterar", "suporte.abrir", "assinatura.gerir", "cobrancas.contatar", "cobrancas.gravar"],
+  vendedor: ["clientes.gravar", "vendas.criar", "vendas.cancelar", "vendas.editar", "vendas.excluir", "catalogo.gravar", "mensagens.enviar", "suporte.abrir", "estoque.ajustar", "cobrancas.contatar"],
   operador: ["pagamentos.registrar", "mensagens.enviar", "suporte.abrir", "relatorios.ler", "cobrancas.contatar"],
 };
 

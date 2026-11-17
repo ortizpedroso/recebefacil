@@ -21,7 +21,7 @@ export function Status({ value }: { value: string }) {
   const tone =
     value === "paga" || value === "ativo" || value === "ativa" || value === "concluido"
       ? "bg-emerald-50 text-emerald-700"
-      : value === "vencida" || value === "cancelada" || value === "estornada"
+      : value === "vencida" || value === "cancelada"
         ? "bg-red-50 text-red-700"
         : value === "parcial" || value === "suspensa"
           ? "bg-amber-50 text-amber-700"

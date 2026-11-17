@@ -10,7 +10,6 @@ import {
   contacts,
   contracts,
   dueChanges,
-  installments,
   campaignRecipients,
   campaigns,
   errorEvents,
@@ -360,7 +359,7 @@ export async function ensureOrganization(db: DB, viewerKey: string, userName: st
 export async function resetOrganization(db: DB, organizationId: string, userName: string) {
   await db.transaction(async (tx) => {
     const scoped = tx as unknown as DB;
-    const rows = [campaignRecipients, campaigns, stockMoves, fiscalDocuments, platformInvoices, subscriptions, supportTickets, errorEvents, payments, contacts, dueChanges, charges, installments, recurrences, saleItems, contracts, sales, catalogItems, clients, members, integrationEvents];
+    const rows = [campaignRecipients, campaigns, stockMoves, fiscalDocuments, platformInvoices, subscriptions, supportTickets, errorEvents, payments, contacts, dueChanges, charges, recurrences, saleItems, contracts, sales, catalogItems, clients, members, integrationEvents];
     for (const table of rows) {
       await scoped.delete(table).where(eq(table.organizationId, organizationId));
     }

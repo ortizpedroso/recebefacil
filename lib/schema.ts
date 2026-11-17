@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { boolean, index, integer, pgTable, text, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const organizations = pgTable(
@@ -15,6 +16,8 @@ export const organizations = pgTable(
     asaasEnvironment: text("asaas_environment").notNull(),
     asaasConnected: boolean("asaas_connected").notNull(),
     asaasSyncedAt: text("asaas_synced_at"),
+    lateFineBp: integer("late_fine_bp").notNull().default(200),
+    lateInterestMonthlyBp: integer("late_interest_monthly_bp").notNull().default(100),
     createdAt: text("created_at").notNull(),
   },
   (table) => [uniqueIndex("organizations_viewer_key").on(table.viewerKey)],
@@ -89,9 +92,17 @@ export const sales = pgTable(
     notes: text("notes").notNull(),
     mode: text("mode").notNull(),
     status: text("status").notNull(),
+    installmentCount: integer("installment_count"),
+    periodicity: text("periodicity"),
+    interestMonthlyBp: integer("interest_monthly_bp").notNull().default(0),
+    adjustYearlyBp: integer("adjust_yearly_bp").notNull().default(0),
+    entryCents: integer("entry_cents").notNull().default(0),
     createdAt: text("created_at").notNull(),
   },
-  (table) => [index("sales_org_date").on(table.organizationId, table.soldOn)],
+  (table) => [
+    index("sales_org_date").on(table.organizationId, table.soldOn),
+    uniqueIndex("sales_org_code").on(table.organizationId, table.code),
+  ],
 );
 
 export const saleItems = pgTable(
@@ -117,7 +128,7 @@ export const contracts = pgTable(
     organizationId: text("organization_id").notNull(),
     number: text("number").notNull(),
     clientId: text("client_id").notNull(),
-    saleId: text("sale_id").notNull(),
+    saleId: text("sale_id"),
     description: text("description").notNull(),
     totalCents: integer("total_cents").notNull(),
     startsOn: text("starts_on").notNull(),
@@ -125,26 +136,7 @@ export const contracts = pgTable(
     status: text("status").notNull(),
     terms: text("terms").notNull(),
   },
-  (table) => [index("contracts_org").on(table.organizationId)],
-);
-
-export const installments = pgTable(
-  "installments",
-  {
-    id: text("id").primaryKey(),
-    organizationId: text("organization_id").notNull(),
-    saleId: text("sale_id").notNull(),
-    contractId: text("contract_id"),
-    clientId: text("client_id").notNull(),
-    number: integer("number").notNull(),
-    count: integer("count").notNull(),
-    label: text("label").notNull(),
-    dueOn: text("due_on").notNull(),
-    amountCents: integer("amount_cents").notNull(),
-    paidCents: integer("paid_cents").notNull(),
-    status: text("status").notNull(),
-  },
-  (table) => [index("installments_org_due").on(table.organizationId, table.dueOn)],
+  (table) => [index("contracts_org").on(table.organizationId), uniqueIndex("contracts_org_number").on(table.organizationId, table.number)],
 );
 
 export const recurrences = pgTable(
@@ -174,8 +166,10 @@ export const charges = pgTable(
     clientId: text("client_id").notNull(),
     saleId: text("sale_id"),
     contractId: text("contract_id"),
-    installmentId: text("installment_id"),
     recurrenceId: text("recurrence_id"),
+    number: integer("number"),
+    count: integer("count"),
+    label: text("label"),
     amountCents: integer("amount_cents").notNull(),
     paidCents: integer("paid_cents").notNull(),
     dueOn: text("due_on").notNull(),
@@ -183,7 +177,11 @@ export const charges = pgTable(
     status: text("status").notNull(),
     paidOn: text("paid_on"),
   },
-  (table) => [index("charges_org_due").on(table.organizationId, table.dueOn)],
+  (table) => [
+    index("charges_org_due").on(table.organizationId, table.dueOn),
+    uniqueIndex("charges_org_code").on(table.organizationId, table.code),
+    uniqueIndex("charges_recurrence_due").on(table.recurrenceId, table.dueOn).where(sql`recurrence_id is not null`),
+  ],
 );
 
 export const payments = pgTable(
@@ -192,8 +190,8 @@ export const payments = pgTable(
     id: text("id").primaryKey(),
     organizationId: text("organization_id").notNull(),
     chargeId: text("charge_id").notNull(),
-    installmentId: text("installment_id"),
     amountCents: integer("amount_cents").notNull(),
+    feeCents: integer("fee_cents").notNull().default(0),
     paidOn: text("paid_on").notNull(),
     method: text("method").notNull(),
     note: text("note").notNull(),
@@ -221,7 +219,7 @@ export const contacts = pgTable(
 export const dueChanges = pgTable("due_changes", {
   id: text("id").primaryKey(),
   organizationId: text("organization_id").notNull(),
-  installmentId: text("installment_id").notNull(),
+  chargeId: text("charge_id"),
   previousDue: text("previous_due").notNull(),
   nextDue: text("next_due").notNull(),
   createdAt: text("created_at").notNull(),
@@ -255,17 +253,21 @@ export const platformInvoices = pgTable("platform_invoices", {
   paidOn: text("paid_on"),
 });
 
-export const fiscalDocuments = pgTable("fiscal_documents", {
-  id: text("id").primaryKey(),
-  organizationId: text("organization_id").notNull(),
-  saleId: text("sale_id").notNull(),
-  number: integer("number").notNull(),
-  series: text("series").notNull(),
-  status: text("status").notNull(),
-  totalCents: integer("total_cents").notNull(),
-  accessKey: text("access_key").notNull(),
-  issuedAt: text("issued_at").notNull(),
-});
+export const fiscalDocuments = pgTable(
+  "fiscal_documents",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    saleId: text("sale_id").notNull(),
+    number: integer("number").notNull(),
+    series: text("series").notNull(),
+    status: text("status").notNull(),
+    totalCents: integer("total_cents").notNull(),
+    accessKey: text("access_key").notNull(),
+    issuedAt: text("issued_at").notNull(),
+  },
+  (table) => [uniqueIndex("fiscal_documents_org_series_number").on(table.organizationId, table.series, table.number)],
+);
 
 export const stockMoves = pgTable("stock_moves", {
   id: text("id").primaryKey(),

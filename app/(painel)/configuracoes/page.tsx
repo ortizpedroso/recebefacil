@@ -13,7 +13,12 @@ export default async function ConfiguracoesPage() {
     <div className="space-y-4">
       <Title hint="A senha de acesso é a da conta autenticada. Esta tela não guarda senha.">Configurações</Title>
       <Card>
-        <CompanyForm tradeName={org.tradeName} legalName={org.legalName} document={org.document} email={org.email} phone={org.phone} timezone={org.timezone} address={org.address} />
+        <CompanyForm tradeName={org.tradeName} legalName={org.legalName} document={org.document} email={org.email} phone={org.phone} timezone={org.timezone} address={org.address} lateFineBp={org.lateFineBp} lateInterestMonthlyBp={org.lateInterestMonthlyBp} />
+      </Card>
+      <Card>
+        <p className="mb-1 font-medium">Usuário e conta</p>
+        <p className="text-sm text-[#64748B]">{session.profileName} · {session.profileEmail} · {roleLabel(session.role)}</p>
+        <p className="mt-2 text-xs text-[#64748B]">A senha é a da conta autenticada (Cursor). Este app não guarda senha. Moeda BRL e datas no padrão brasileiro são fixos.</p>
       </Card>
       <Card>
         <p className="mb-1 font-medium">Equipe</p>

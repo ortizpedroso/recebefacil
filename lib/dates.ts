@@ -24,16 +24,37 @@ export function formatDateTimeBR(iso: string | null): string {
   }).format(date);
 }
 
+const PERIODS_PER_YEAR: Record<Periodicity, number> = {
+  semanal: 52,
+  quinzenal: 24,
+  mensal: 12,
+  trimestral: 4,
+  semestral: 2,
+  anual: 1,
+};
+
+export function periodsPerYear(periodicity: Periodicity): number {
+  return PERIODS_PER_YEAR[periodicity];
+}
+
+const WEEKLY_DAYS: Partial<Record<Periodicity, number>> = { semanal: 7, quinzenal: 15 };
+
 export function addPeriod(iso: string, periodicity: Periodicity, steps: number): string {
   const [year, month, day] = iso.slice(0, 10).split("-").map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (periodicity === "semanal") date.setUTCDate(date.getUTCDate() + 7 * steps);
-  else if (periodicity === "quinzenal") date.setUTCDate(date.getUTCDate() + 15 * steps);
-  else if (periodicity === "mensal") date.setUTCMonth(date.getUTCMonth() + steps);
-  else if (periodicity === "trimestral") date.setUTCMonth(date.getUTCMonth() + 3 * steps);
-  else if (periodicity === "semestral") date.setUTCMonth(date.getUTCMonth() + 6 * steps);
-  else date.setUTCFullYear(date.getUTCFullYear() + steps);
-  return date.toISOString().slice(0, 10);
+  const days = WEEKLY_DAYS[periodicity];
+  if (days) return shiftDays(iso, days * steps);
+  // Meses curtos prendem o dia no último dia do mês. 31 de janeiro mais um mês é 28 ou 29 de fevereiro.
+  const monthIndex = year * 12 + (month - 1) + (12 / PERIODS_PER_YEAR[periodicity]) * steps;
+  const targetYear = Math.floor(monthIndex / 12);
+  const targetMonth = monthIndex - targetYear * 12;
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(targetYear, targetMonth, Math.min(day, lastDay))).toISOString().slice(0, 10);
+}
+
+export function periodIndexOnOrAfter(startsOn: string, periodicity: Periodicity, date: string): number {
+  let index = 1;
+  while (addPeriod(startsOn, periodicity, index) < date) index += 1;
+  return index;
 }
 
 export function delayBand(days: number): string {

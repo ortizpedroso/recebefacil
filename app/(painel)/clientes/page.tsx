@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ClientForm } from "@/components/forms";
-import { Card, money, Status, Table, Title } from "@/components/ui";
+import { NewButton } from "@/components/new-button";
+import { money, Status, Table, Title } from "@/components/ui";
 import { clientFinance, loadBook } from "@/lib/read";
 import { requireSession } from "@/lib/session";
 
@@ -12,11 +13,13 @@ export default async function ClientesPage({ searchParams }: { searchParams: Pro
   const rows = book.clients.filter((client) => !query || client.name.toLowerCase().includes(query) || client.document.includes(query));
   return (
     <div className="space-y-4">
-      <Title hint="Pessoa física e jurídica no mesmo cadastro.">Clientes</Title>
+      <div className="flex items-center justify-between gap-3">
+        <Title hint="Pessoa física e jurídica no mesmo cadastro.">Clientes</Title>
+        <NewButton title="Novo cliente"><ClientForm /></NewButton>
+      </div>
       <form>
         <input name="q" defaultValue={params.q} placeholder="Pesquisar nome ou documento" className="w-full rounded-lg border border-[#E2E8F0] px-3 py-2 text-sm md:w-80" />
       </form>
-      <Card><ClientForm /></Card>
       <Table>
         <thead className="bg-slate-50 text-xs text-[#64748B]"><tr><th className="p-3">Nome</th><th>Documento</th><th>Telefone</th><th>Compras</th><th>Pago</th><th>Aberto</th></tr></thead>
         <tbody>

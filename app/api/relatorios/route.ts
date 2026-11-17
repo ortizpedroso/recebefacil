@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { formatDateBR } from "@/lib/dates";
 import { formatBRL, cents } from "@/lib/money";
 import { pdfDocument } from "@/lib/pdf";
+import { xlsDocument } from "@/lib/xls";
 import { clientName, loadBook } from "@/lib/read";
 import { requireSession } from "@/lib/session";
 
@@ -27,6 +28,15 @@ export async function GET(request: Request) {
   if (format === "pdf") {
     return new NextResponse(pdfDocument(lines), {
       headers: { "content-type": "application/pdf", "content-disposition": "attachment; filename=relatorio.pdf" },
+    });
+  }
+  if (format === "xls") {
+    const rows = [
+      ["codigo", "data", "cliente", "total", "status"],
+      ...sales.map((sale) => [sale.code, formatDateBR(sale.soldOn), clientName(book, sale.clientId), formatBRL(cents(sale.totalCents)), sale.status]),
+    ];
+    return new NextResponse(xlsDocument(rows), {
+      headers: { "content-type": "application/vnd.ms-excel", "content-disposition": "attachment; filename=relatorio.xls" },
     });
   }
   const csv = ["codigo,data,cliente,total_centavos,status", ...sales.map((sale) => `${sale.code},${sale.soldOn},"${clientName(book, sale.clientId)}",${sale.totalCents},${sale.status}`)].join("\n");

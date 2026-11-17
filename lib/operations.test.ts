@@ -8,8 +8,8 @@ import { payPlatformInvoice, subscribe } from "./billing";
 import { openIsolatedDatabase } from "./db";
 import { DomainError, createSale } from "./ledger";
 import { cents } from "./money";
-import { pagedInstallments } from "./read";
-import { catalogItems, installments, organizations, platformInvoices, sales } from "./schema";
+import { pagedCharges } from "./read";
+import { catalogItems, charges, organizations, platformInvoices, sales } from "./schema";
 import { insertCatalog, insertClient } from "./tenant";
 
 async function org() {
@@ -127,22 +127,26 @@ test("parcelas passam para a página seguinte", async () => {
     createdAt: "2026-11-16T00:00:00.000Z",
   });
   for (let index = 0; index < 9; index += 1) {
-    await db.insert(installments).values({
-      id: `inst-${index}`,
+    await db.insert(charges).values({
+      id: `charge-${index}`,
       organizationId,
+      code: `COB-${index + 1}`,
       saleId: "sale-1",
       contractId: null,
+      recurrenceId: null,
       clientId,
       number: index + 1,
       count: 9,
       label: `Parcela ${index + 1}`,
+      method: "Pix",
+      paidOn: null,
       dueOn: `2026-12-${String(index + 1).padStart(2, "0")}`,
       amountCents: 100,
       paidCents: 0,
       status: "pendente",
     });
   }
-  const listed = await pagedInstallments(db, organizationId, 2);
+  const listed = await pagedCharges(db, organizationId, 2, "parcelas");
   assert.equal(listed.pages, 2);
   assert.equal(listed.rows.length, 1);
 });

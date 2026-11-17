@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { isValidDocument } from "./documents";
+import { MAX_INSTALLMENTS } from "./money";
+import { MAX_ADJUST_BP, MAX_FINANCE_INTEREST_BP } from "./schedule";
 
 export function formResolver<T>(schema: z.ZodType<T>) {
   return async (values: unknown) => {
@@ -66,9 +68,11 @@ export const saleSchema = z.object({
   notes: z.string().trim().max(2000),
   mode: z.enum(["avista", "parcelado", "recorrente"]),
   entry: moneyField,
-  installmentCount: z.number().int().min(1).max(60),
+  installmentCount: z.number().int().min(1).max(MAX_INSTALLMENTS),
   firstDue: dateField,
   periodicity: periodicityField,
+  interestMonthlyBp: z.number().int().min(0).max(MAX_FINANCE_INTEREST_BP).default(0),
+  adjustYearlyBp: z.number().int().min(0).max(MAX_ADJUST_BP).default(0),
   method: methodField,
   makeContract: z.boolean(),
   items: z.array(saleItemSchema).min(1),
@@ -77,9 +81,11 @@ export const saleSchema = z.object({
 export const paymentSchema = z.object({
   chargeId: z.string().uuid(),
   amount: moneyField,
+  fee: z.string().trim().default("0"),
   paidOn: dateField,
   method: methodField,
   note: z.string().trim().max(500),
+  idempotencyKey: z.string().trim().min(8).max(100),
 });
 
 export const contactSchema = z.object({
@@ -91,6 +97,6 @@ export const contactSchema = z.object({
 });
 
 export const dueSchema = z.object({
-  installmentId: z.string().uuid(),
+  chargeId: z.string().uuid(),
   dueOn: dateField,
 });

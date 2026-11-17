@@ -2,6 +2,9 @@ import { eq } from "drizzle-orm";
 import { CopyLink } from "@/components/copy-link";
 import { Pager } from "@/components/pager";
 import { reverseAction } from "@/app/actions";
+import { ConfirmAction } from "@/components/confirm-action";
+import { NewButton } from "@/components/new-button";
+import { ChargeForm } from "@/components/forms";
 import { money, Status, Table, Title } from "@/components/ui";
 import { formatDateBR, todayIn } from "@/lib/dates";
 import { displayStatus, pagedCharges } from "@/lib/read";
@@ -17,7 +20,10 @@ export default async function CobrancasPage({ searchParams }: { searchParams: Pr
   const names = new Map(people.map((client) => [client.id, client.name]));
   return (
     <div>
-      <Title hint="O link é desta demonstração. Não existe checkout, Pix real nem boleto registrado.">Cobranças e recebimentos</Title>
+      <div className="flex items-center justify-between gap-3">
+        <Title hint="Crie uma cobrança avulsa ou acompanhe as que nasceram de venda, contrato e recorrência.">Cobranças e recebimentos</Title>
+        <NewButton title="Nova cobrança"><ChargeForm clients={people.filter((client) => client.active).map((client) => ({ id: client.id, name: client.name }))} today={today} /></NewButton>
+      </div>
       <Table>
         <thead className="bg-slate-50 text-xs text-[#64748B]"><tr><th className="p-3">Código</th><th>Cliente</th><th>Vencimento</th><th>Valor</th><th>Forma</th><th>Status</th><th></th></tr></thead>
         <tbody>
@@ -34,10 +40,15 @@ export default async function CobrancasPage({ searchParams }: { searchParams: Pr
                 <td className="p-3 text-sm">
                   <p className="text-xs text-[#64748B]">Link demonstrativo /cobrancas#{charge.code}</p>
                   <CopyLink path={`/cobrancas#${charge.code}`} />
-                  {status === "paga" ? (
-                    <form action={async () => { "use server"; await reverseAction(charge.id); }}>
-                      <button className="text-[#EF4444]">Estornar</button>
-                    </form>
+                  {charge.paidCents > 0 && status !== "cancelada" ? (
+                    <ConfirmAction
+                      label="Estornar"
+                      confirmLabel="Estornar cobrança"
+                      message="O pagamento será revertido e a cobrança voltará a ficar pendente."
+                      action={reverseAction.bind(null, charge.id)}
+                      className="text-[#EF4444]"
+                      danger
+                    />
                   ) : null}
                 </td>
               </tr>

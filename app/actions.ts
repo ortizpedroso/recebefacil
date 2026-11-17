@@ -4,12 +4,14 @@ import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { can, isRole, type Permission } from "../lib/access";
 import { isPlan, payPlatformInvoice, subscribe } from "../lib/billing";
-import { todayIn } from "../lib/dates";
+import { todayIn, type Periodicity } from "../lib/dates";
 import { isValidCnpj } from "../lib/documents";
-import { DomainError, cancelSale, changeDueDate, createSale, registerPayment, reverseCharge, setContractStatus, setRecurrenceStatus } from "../lib/ledger";
-import { cents, parseReais } from "../lib/money";
+import { DomainError, cancelSale, changeDueDate, createCharge, createContract, createRecurrence, createSale, deleteSale, registerPayment, reverseCharge, setContractStatus, setRecurrenceStatus, updateContract, updateRecurrence, updateSale, type SaleInput } from "../lib/ledger";
+import { lateSettingsError } from "../lib/late";
+import { cents, parsePercentBp, parseReais } from "../lib/money";
 import { requireSession } from "../lib/session";
 import { catalogSchema, clientSchema, contactSchema, dueSchema, paymentSchema, saleSchema } from "../lib/schemas";
+import type { z } from "zod";
 import { campaignRecipients, campaigns, catalogItems, clients, contacts, fiscalDocuments, integrationEvents, members, organizations, sales, stockMoves, supportTickets } from "../lib/schema";
 import { insertCatalog, insertClient, resetOrganization, updateCatalog, updateClient } from "../lib/tenant";
 
@@ -95,25 +97,45 @@ export async function toggleCatalogAction(id: string, active: boolean) {
   revalidatePath("/produtos");
 }
 
+function toSaleInput(data: z.infer<typeof saleSchema>): SaleInput {
+  return {
+    clientId: data.clientId,
+    soldOn: data.soldOn,
+    discountCents: parseReais(data.discount || "0"),
+    notes: data.notes,
+    mode: data.mode,
+    entryCents: parseReais(data.entry || "0"),
+    installmentCount: data.installmentCount,
+    firstDue: data.firstDue,
+    periodicity: data.periodicity,
+    interestMonthlyBp: data.interestMonthlyBp,
+    adjustYearlyBp: data.adjustYearlyBp,
+    method: data.method,
+    makeContract: data.makeContract,
+    items: data.items.map((item) => ({ ...item, unitCents: cents(item.unitCents) })),
+  };
+}
+
 export async function createSaleAction(raw: unknown) {
   const parsed = saleSchema.safeParse(raw);
   if (!parsed.success) return { ok: false as const, error: "Revise a venda." };
   try {
     const { db, org } = await allow("vendas.criar");
-    const saleId = await createSale(db, org.id, {
-      clientId: parsed.data.clientId,
-      soldOn: parsed.data.soldOn,
-      discountCents: parseReais(parsed.data.discount || "0"),
-      notes: parsed.data.notes,
-      mode: parsed.data.mode,
-      entryCents: parseReais(parsed.data.entry || "0"),
-      installmentCount: parsed.data.installmentCount,
-      firstDue: parsed.data.firstDue,
-      periodicity: parsed.data.periodicity,
-      method: parsed.data.method,
-      makeContract: parsed.data.makeContract,
-      items: parsed.data.items.map((item) => ({ ...item, unitCents: cents(item.unitCents) })),
-    });
+    const saleId = await createSale(db, org.id, toSaleInput(parsed.data));
+    revalidatePath("/vendas");
+    revalidatePath("/");
+    return { ok: true as const, saleId };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function updateSaleAction(saleId: string, raw: unknown) {
+  const parsed = saleSchema.safeParse(raw);
+  if (!parsed.success) return { ok: false as const, error: "Revise a venda." };
+  try {
+    const { db, org } = await allow("vendas.editar");
+    await updateSale(db, org.id, saleId, toSaleInput(parsed.data));
     revalidatePath("/vendas");
     revalidatePath("/");
     return { ok: true as const, saleId };
@@ -130,11 +152,14 @@ export async function payAction(raw: unknown) {
     await registerPayment(db, org.id, {
       chargeId: parsed.data.chargeId,
       amountCents: parseReais(parsed.data.amount),
+      feeCents: parseReais(parsed.data.fee || "0"),
       paidOn: parsed.data.paidOn,
       method: parsed.data.method,
       note: parsed.data.note,
+      idempotencyKey: parsed.data.idempotencyKey,
     });
     revalidatePath("/parcelas");
+    revalidatePath("/cobrancas");
     revalidatePath("/");
     return { ok: true as const };
   } catch (error) {
@@ -158,8 +183,9 @@ export async function dueAction(raw: unknown) {
   if (!parsed.success) return { ok: false as const, error: "Informe o novo vencimento." };
   try {
     const { db, org } = await allow("pagamentos.registrar");
-    await changeDueDate(db, org.id, parsed.data.installmentId, parsed.data.dueOn);
+    await changeDueDate(db, org.id, parsed.data.chargeId, parsed.data.dueOn);
     revalidatePath("/parcelas");
+    revalidatePath("/cobrancas");
     return { ok: true as const };
   } catch (error) {
     return fail(error);
@@ -172,6 +198,156 @@ export async function cancelSaleAction(saleId: string) {
     await cancelSale(db, org.id, saleId);
     revalidatePath("/vendas");
     revalidatePath("/");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function deleteSaleAction(saleId: string) {
+  try {
+    const { db, org } = await allow("vendas.excluir");
+    await deleteSale(db, org.id, saleId);
+    revalidatePath("/vendas");
+    revalidatePath("/");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function createContractAction(formData: FormData) {
+  try {
+    const { db, org } = await allow("contratos.alterar");
+    const clientId = String(formData.get("clientId") || "");
+    const description = String(formData.get("description") || "").trim();
+    const startsOn = String(formData.get("startsOn") || "");
+    const firstDue = String(formData.get("firstDue") || "");
+    const endsOnRaw = String(formData.get("endsOn") || "").trim();
+    const periodicity = String(formData.get("periodicity") || "mensal");
+    const totalCents = parseReais(String(formData.get("total") || ""));
+    const installmentCount = Number(formData.get("installmentCount") || "1");
+    if (!clientId || description.length < 2 || !/^\d{4}-\d{2}-\d{2}$/.test(startsOn) || !/^\d{4}-\d{2}-\d{2}$/.test(firstDue)) {
+      return { ok: false as const, error: "Revise os dados do contrato." };
+    }
+    if (!Number.isInteger(installmentCount) || installmentCount < 1 || installmentCount > 60) {
+      return { ok: false as const, error: "A quantidade de parcelas deve ficar entre 1 e 60." };
+    }
+    if (!["semanal", "quinzenal", "mensal", "trimestral", "semestral", "anual"].includes(periodicity)) {
+      return { ok: false as const, error: "Periodicidade inválida." };
+    }
+    const contractId = await createContract(db, org.id, {
+      clientId,
+      description,
+      totalCents,
+      startsOn,
+      endsOn: endsOnRaw || null,
+      terms: String(formData.get("terms") || "").trim(),
+      installmentCount,
+      firstDue,
+      periodicity: periodicity as Periodicity,
+      method: String(formData.get("method") || "Pix"),
+    });
+    revalidatePath("/contratos");
+    revalidatePath("/");
+    return { ok: true as const, contractId };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function createRecurrenceAction(formData: FormData) {
+  try {
+    const { db, org } = await allow("recorrencias.alterar");
+    const clientId = String(formData.get("clientId") || "");
+    const description = String(formData.get("description") || "").trim();
+    const startsOn = String(formData.get("startsOn") || "");
+    const endsOnRaw = String(formData.get("endsOn") || "").trim();
+    const periodicity = String(formData.get("periodicity") || "mensal");
+    const amountCents = parseReais(String(formData.get("amount") || ""));
+    if (!clientId || description.length < 2 || !/^\d{4}-\d{2}-\d{2}$/.test(startsOn)) {
+      return { ok: false as const, error: "Revise os dados da recorrência." };
+    }
+    if (!["semanal", "quinzenal", "mensal", "trimestral", "semestral", "anual"].includes(periodicity)) {
+      return { ok: false as const, error: "Periodicidade inválida." };
+    }
+    const recurrenceId = await createRecurrence(db, org.id, {
+      clientId,
+      description,
+      amountCents,
+      periodicity: periodicity as Periodicity,
+      startsOn,
+      endsOn: endsOnRaw || null,
+      method: String(formData.get("method") || "Pix"),
+    });
+    revalidatePath("/recorrencias");
+    revalidatePath("/");
+    return { ok: true as const, recurrenceId };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function createChargeAction(formData: FormData) {
+  try {
+    const { db, org } = await allow("cobrancas.gravar");
+    const clientId = String(formData.get("clientId") || "");
+    const dueOn = String(formData.get("dueOn") || "");
+    const amountCents = parseReais(String(formData.get("amount") || ""));
+    if (!clientId || !/^\d{4}-\d{2}-\d{2}$/.test(dueOn)) {
+      return { ok: false as const, error: "Revise os dados da cobrança." };
+    }
+    const chargeId = await createCharge(db, org.id, {
+      clientId,
+      amountCents,
+      dueOn,
+      method: String(formData.get("method") || "Pix"),
+    });
+    revalidatePath("/cobrancas");
+    revalidatePath("/");
+    return { ok: true as const, chargeId };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function editContractAction(contractId: string, formData: FormData) {
+  try {
+    const { db, org } = await allow("contratos.alterar");
+    const description = String(formData.get("description") || "").trim();
+    const startsOn = String(formData.get("startsOn") || "");
+    const endsOnRaw = String(formData.get("endsOn") || "").trim();
+    if (description.length < 2 || !/^\d{4}-\d{2}-\d{2}$/.test(startsOn)) {
+      return { ok: false as const, error: "Revise os dados do contrato." };
+    }
+    await updateContract(db, org.id, contractId, {
+      description,
+      startsOn,
+      endsOn: endsOnRaw || null,
+      terms: String(formData.get("terms") || "").trim(),
+    });
+    revalidatePath("/contratos");
+    revalidatePath(`/contratos/${contractId}/editar`);
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function editRecurrenceAction(recurrenceId: string, formData: FormData) {
+  try {
+    const { db, org } = await allow("recorrencias.alterar");
+    const description = String(formData.get("description") || "").trim();
+    const amountCents = parseReais(String(formData.get("amount") || ""));
+    const endsOnRaw = String(formData.get("endsOn") || "").trim();
+    if (description.length < 2) return { ok: false as const, error: "Revise a descrição." };
+    await updateRecurrence(db, org.id, recurrenceId, {
+      description,
+      amountCents,
+      endsOn: endsOnRaw || null,
+    });
+    revalidatePath("/recorrencias");
+    revalidatePath(`/recorrencias/${recurrenceId}/editar`);
     return { ok: true as const };
   } catch (error) {
     return fail(error);
@@ -278,9 +454,23 @@ export async function companyAction(formData: FormData) {
   const { db, org } = await allow("empresa.gravar");
   const document = String(formData.get("document") || org.document);
   if (!isValidCnpj(document)) return { ok: false as const, error: "CNPJ inválido." };
+  let late = { lateFineBp: org.lateFineBp, lateInterestMonthlyBp: org.lateInterestMonthlyBp };
+  try {
+    const fine = formData.get("lateFine");
+    const interest = formData.get("lateInterest");
+    late = {
+      lateFineBp: fine === null ? org.lateFineBp : parsePercentBp(String(fine)),
+      lateInterestMonthlyBp: interest === null ? org.lateInterestMonthlyBp : parsePercentBp(String(interest)),
+    };
+  } catch {
+    return { ok: false as const, error: "Informe multa e juros como percentual." };
+  }
+  const lateError = lateSettingsError(late);
+  if (lateError) return { ok: false as const, error: lateError };
   await db
     .update(organizations)
     .set({
+      ...late,
       tradeName: String(formData.get("tradeName") || org.tradeName),
       legalName: String(formData.get("legalName") || org.legalName),
       document,

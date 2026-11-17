@@ -7,7 +7,7 @@ import { and, eq } from "drizzle-orm";
 import { openIsolatedDatabase } from "./db";
 import { DomainError, advanceRecurrences, cancelSale, createSale, registerPayment } from "./ledger";
 import { cents } from "./money";
-import { charges, clients, installments, organizations, recurrences, sales } from "./schema";
+import { charges, clients, organizations, recurrences, sales } from "./schema";
 import { ensureOrganization, insertClient, updateClient } from "./tenant";
 
 test("uma venda de R$ 10.000 fecha entrada e quatro parcelas, e rejeita pagamento acima do saldo", async () => {
@@ -59,13 +59,12 @@ test("uma venda de R$ 10.000 fecha entrada e quatro parcelas, e rejeita pagament
     makeContract: true,
     items: [{ catalogItemId: null, description: "Projeto de móveis", kind: "produto", quantity: 1, unitCents: cents(1_000_000) }],
   });
-  const rows = await db.select().from(installments).where(and(eq(installments.organizationId, organizationId), eq(installments.saleId, saleId)));
+  const rows = await db.select().from(charges).where(and(eq(charges.organizationId, organizationId), eq(charges.saleId, saleId)));
+  assert.equal(rows.length, 5);
   assert.equal(rows.reduce((sum, row) => sum + row.amountCents, 0), 1_000_000);
-  assert.equal(rows[0]?.amountCents, 200_000);
-  const entry = rows.find((row) => row.label === "Entrada");
-  assert.ok(entry);
-  const { charges } = await import("./schema");
-  const chargeRows = await db.select().from(charges).where(eq(charges.installmentId, entry.id));
+  const chargeRows = rows.filter((row) => row.label === "Entrada");
+  assert.equal(chargeRows.length, 1);
+  assert.equal(chargeRows[0]?.amountCents, 200_000);
   const paymentId = await registerPayment(db, organizationId, {
     chargeId: chargeRows[0].id,
     amountCents: cents(200_000),

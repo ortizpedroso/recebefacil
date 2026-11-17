@@ -1,5 +1,5 @@
 import { money, Title } from "@/components/ui";
-import { clientFinance, loadBook } from "@/lib/read";
+import { clientFinance, loadBook, receiptsByMethod, salesByItem } from "@/lib/read";
 import { requireSession } from "@/lib/session";
 
 export default async function RelatoriosPage({ searchParams }: { searchParams: Promise<{ de?: string; ate?: string; cliente?: string; status?: string }> }) {
@@ -26,7 +26,7 @@ export default async function RelatoriosPage({ searchParams }: { searchParams: P
     .slice(0, 5);
   return (
     <div className="space-y-4">
-      <Title hint="O CSV e o PDF baixam as vendas filtradas desta empresa.">Relatórios</Title>
+      <Title hint="O CSV, o Excel e o PDF baixam as vendas filtradas desta empresa.">Relatórios</Title>
       <form className="flex flex-wrap gap-2">
         <input name="de" type="date" defaultValue={params.de} aria-label="De" className="rounded-lg border border-[#E2E8F0] px-3 py-2 text-sm" />
         <input name="ate" type="date" defaultValue={params.ate} aria-label="Até" className="rounded-lg border border-[#E2E8F0] px-3 py-2 text-sm" />
@@ -45,6 +45,7 @@ export default async function RelatoriosPage({ searchParams }: { searchParams: P
       <div className="flex gap-3 text-sm">
         <a className="rounded-lg bg-teal-700 px-4 py-2 text-white" href={`/api/relatorios${suffix ? `?${suffix}` : ""}`}>Baixar CSV</a>
         <a className="rounded-lg border border-[#E2E8F0] bg-white px-4 py-2" href={`/api/relatorios?formato=pdf${suffix ? `&${suffix}` : ""}`}>Baixar PDF</a>
+        <a className="rounded-lg border border-[#E2E8F0] bg-white px-4 py-2" href={`/api/relatorios?formato=xls${suffix ? `&${suffix}` : ""}`}>Baixar Excel</a>
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
         <p className="rounded-xl border border-[#E2E8F0] bg-white p-4">Vendas filtradas {sales.length}</p>
@@ -53,6 +54,10 @@ export default async function RelatoriosPage({ searchParams }: { searchParams: P
       </div>
       <h2 className="font-medium">Clientes com maior volume</h2>
       {ranking.map((row) => <p key={row.client.id} className="text-sm">{row.client.name} · {money(row.finance.bought)}</p>)}
+      <h2 className="font-medium">Recebimentos por forma</h2>
+      {receiptsByMethod(book).map((row) => <p key={row.method} className="text-sm">{row.method} · {money(row.total)}</p>)}
+      <h2 className="font-medium">Vendas por produto ou serviço</h2>
+      {salesByItem(book).map((row) => <p key={row.description} className="text-sm">{row.description} · {row.quantity} un · {money(row.total)}</p>)}
     </div>
   );
 }

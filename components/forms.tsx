@@ -7,7 +7,8 @@ import { useForm } from "react-hook-form";
 import { clientSchema, catalogSchema, formResolver } from "@/lib/schemas";
 import { lookupCep } from "@/lib/cep";
 import { maskCep, maskCnpj, maskDocument, maskMoney, maskPhone, maskUf } from "@/lib/masks";
-import { companyAction, createCatalogAction, createClientAction, inviteAction, payAction, supportAction, updateCatalogAction, updateClientAction } from "@/app/actions";
+import { cents, formatBRL, formatPercentBp } from "@/lib/money";
+import { companyAction, createCatalogAction, createChargeAction, createClientAction, createContractAction, createRecurrenceAction, editContractAction, editRecurrenceAction, inviteAction, payAction, supportAction, updateCatalogAction, updateClientAction } from "@/app/actions";
 import { buttonClass, Field, inputClass } from "./ui";
 
 export function ClientForm({
@@ -191,28 +192,41 @@ export function CatalogForm({
   );
 }
 
-export function PayForm({ chargeId, today }: { chargeId: string; today: string }) {
+export function PayForm({ chargeId, today, suggestedFeeCents = 0 }: { chargeId: string; today: string; suggestedFeeCents?: number }) {
   const router = useRouter();
   const [message, setMessage] = useState("");
   const [amount, setAmount] = useState("");
+  const [fee, setFee] = useState(formatBRL(cents(suggestedFeeCents)).replace("R$ ", ""));
+  const [pending, setPending] = useState(false);
+  // A chave nasce com o formulário. Um clique repetido reenvia a mesma chave e o servidor devolve o mesmo pagamento.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   return (
     <form
       className="flex flex-wrap items-end gap-2"
       onSubmit={async (event) => {
         event.preventDefault();
         const data = new FormData(event.currentTarget);
+        setPending(true);
         const result = await payAction({
           chargeId,
           amount,
+          fee: fee || "0",
           paidOn: String(data.get("paidOn") || today),
           method: String(data.get("method") || "Pix"),
           note: "Pagamento demonstrativo.",
+          idempotencyKey,
         });
+        setPending(false);
         setMessage(result.ok ? "Pagamento registrado." : result.error);
-        if (result.ok) router.refresh();
+        if (result.ok) {
+          setIdempotencyKey(crypto.randomUUID());
+          setAmount("");
+          router.refresh();
+        }
       }}
     >
-      <input name="amount" required placeholder="0,00" inputMode="numeric" className={`${inputClass} w-28`} value={amount} onChange={(event) => setAmount(maskMoney(event.target.value))} />
+      <input name="amount" required placeholder="0,00" inputMode="numeric" className={`${inputClass} w-28`} value={amount} onChange={(event) => setAmount(maskMoney(event.target.value))} aria-label="Valor" />
+      <input name="fee" placeholder="Multa e juros" inputMode="numeric" className={`${inputClass} w-28`} value={fee} onChange={(event) => setFee(maskMoney(event.target.value))} aria-label="Multa e juros" />
       <input name="paidOn" type="date" defaultValue={today} className={inputClass} />
       <select name="method" className={inputClass}>
         <option>Pix</option>
@@ -220,7 +234,7 @@ export function PayForm({ chargeId, today }: { chargeId: string; today: string }
         <option>Cartão de crédito</option>
         <option>Transferência</option>
       </select>
-      <button className={buttonClass} type="submit">Registrar</button>
+      <button className={buttonClass} type="submit" disabled={pending}>Registrar</button>
       {message ? <span className="text-xs text-[#64748B]">{message}</span> : null}
     </form>
   );
@@ -234,6 +248,8 @@ export function CompanyForm({
   phone,
   timezone,
   address,
+  lateFineBp,
+  lateInterestMonthlyBp,
 }: {
   tradeName: string;
   legalName: string;
@@ -242,6 +258,8 @@ export function CompanyForm({
   phone: string;
   timezone: string;
   address: string;
+  lateFineBp: number;
+  lateInterestMonthlyBp: number;
 }) {
   const [doc, setDoc] = useState(maskCnpj(document));
   const [tel, setTel] = useState(maskPhone(phone));
@@ -262,6 +280,8 @@ export function CompanyForm({
       <input name="phone" value={tel} onChange={(event) => setTel(maskPhone(event.target.value))} className={inputClass} aria-label="Telefone" inputMode="numeric" placeholder="(00) 0000-0000" />
       <input name="timezone" defaultValue={timezone} className={inputClass} aria-label="Fuso" />
       <input name="address" defaultValue={address} className={`${inputClass} md:col-span-2`} aria-label="Endereço" />
+      <input name="lateFine" defaultValue={formatPercentBp(lateFineBp)} className={inputClass} aria-label="Multa por atraso (%, até 2)" inputMode="decimal" />
+      <input name="lateInterest" defaultValue={formatPercentBp(lateInterestMonthlyBp)} className={inputClass} aria-label="Juros de mora ao mês (%)" inputMode="decimal" />
       <button className={buttonClass}>Salvar empresa</button>
       {message ? <span className="text-sm text-[#64748B]">{message}</span> : null}
     </form>
@@ -311,6 +331,206 @@ export function SupportForm() {
       <textarea name="message" required minLength={5} placeholder="Como podemos ajudar" className={inputClass} aria-label="Mensagem" />
       <button className={buttonClass} type="submit">Enviar chamado</button>
       {message ? <p className="text-sm text-[#64748B]">{message}</p> : null}
+    </form>
+  );
+}
+
+export function ContractForm({ clients, today }: { clients: { id: string; name: string }[]; today: string }) {
+  const router = useRouter();
+  const [message, setMessage] = useState("");
+  const [total, setTotal] = useState("");
+  return (
+    <form
+      className="grid gap-3 md:grid-cols-2"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        const result = await createContractAction(new FormData(event.currentTarget));
+        setMessage(result.ok ? "Contrato criado com parcelas." : result.error);
+        if (result.ok) {
+          event.currentTarget.reset();
+          setTotal("");
+          router.refresh();
+        }
+      }}
+    >
+      <Field label="Cliente">
+        <select name="clientId" required className={inputClass}>
+          {clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
+        </select>
+      </Field>
+      <Field label="Valor total"><input name="total" required placeholder="0,00" inputMode="numeric" className={inputClass} value={total} onChange={(event) => setTotal(maskMoney(event.target.value))} /></Field>
+      <div className="md:col-span-2"><Field label="Descrição"><input name="description" required className={inputClass} /></Field></div>
+      <Field label="Início"><input name="startsOn" type="date" defaultValue={today} className={inputClass} /></Field>
+      <Field label="Término (opcional)"><input name="endsOn" type="date" className={inputClass} /></Field>
+      <Field label="Primeiro vencimento"><input name="firstDue" type="date" defaultValue={today} className={inputClass} /></Field>
+      <Field label="Parcelas"><input name="installmentCount" type="number" min={1} max={60} defaultValue={1} className={inputClass} /></Field>
+      <Field label="Periodicidade">
+        <select name="periodicity" defaultValue="mensal" className={inputClass}>
+          <option value="semanal">Semanal</option>
+          <option value="quinzenal">Quinzenal</option>
+          <option value="mensal">Mensal</option>
+          <option value="trimestral">Trimestral</option>
+          <option value="semestral">Semestral</option>
+          <option value="anual">Anual</option>
+        </select>
+      </Field>
+      <Field label="Forma">
+        <select name="method" defaultValue="Pix" className={inputClass}>
+          <option>Pix</option>
+          <option>Boleto</option>
+          <option>Cartão de crédito</option>
+          <option>Transferência</option>
+        </select>
+      </Field>
+      <div className="md:col-span-2"><Field label="Observações"><input name="terms" className={inputClass} /></Field></div>
+      <div className="md:col-span-2 flex items-center gap-3">
+        <button className={buttonClass} type="submit">Criar contrato</button>
+        {message ? <span className="text-sm text-[#64748B]">{message}</span> : null}
+      </div>
+    </form>
+  );
+}
+
+export function RecurrenceForm({ clients, today }: { clients: { id: string; name: string }[]; today: string }) {
+  const router = useRouter();
+  const [message, setMessage] = useState("");
+  const [amount, setAmount] = useState("");
+  return (
+    <form
+      className="grid gap-3 md:grid-cols-2"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        const result = await createRecurrenceAction(new FormData(event.currentTarget));
+        setMessage(result.ok ? "Recorrência criada." : result.error);
+        if (result.ok) {
+          event.currentTarget.reset();
+          setAmount("");
+          router.refresh();
+        }
+      }}
+    >
+      <Field label="Cliente">
+        <select name="clientId" required className={inputClass}>
+          {clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
+        </select>
+      </Field>
+      <Field label="Valor"><input name="amount" required placeholder="0,00" inputMode="numeric" className={inputClass} value={amount} onChange={(event) => setAmount(maskMoney(event.target.value))} /></Field>
+      <div className="md:col-span-2"><Field label="Descrição"><input name="description" required className={inputClass} /></Field></div>
+      <Field label="Periodicidade">
+        <select name="periodicity" defaultValue="mensal" className={inputClass}>
+          <option value="semanal">Semanal</option>
+          <option value="quinzenal">Quinzenal</option>
+          <option value="mensal">Mensal</option>
+          <option value="trimestral">Trimestral</option>
+          <option value="semestral">Semestral</option>
+          <option value="anual">Anual</option>
+        </select>
+      </Field>
+      <Field label="Forma">
+        <select name="method" defaultValue="Pix" className={inputClass}>
+          <option>Pix</option>
+          <option>Boleto</option>
+          <option>Cartão de crédito</option>
+          <option>Transferência</option>
+        </select>
+      </Field>
+      <Field label="Primeira cobrança"><input name="startsOn" type="date" defaultValue={today} className={inputClass} /></Field>
+      <Field label="Encerramento (opcional)"><input name="endsOn" type="date" className={inputClass} /></Field>
+      <div className="md:col-span-2 flex items-center gap-3">
+        <button className={buttonClass} type="submit">Criar recorrência</button>
+        {message ? <span className="text-sm text-[#64748B]">{message}</span> : null}
+      </div>
+    </form>
+  );
+}
+
+export function ChargeForm({ clients, today }: { clients: { id: string; name: string }[]; today: string }) {
+  const router = useRouter();
+  const [message, setMessage] = useState("");
+  const [amount, setAmount] = useState("");
+  return (
+    <form
+      className="grid gap-3 md:grid-cols-2"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        const result = await createChargeAction(new FormData(event.currentTarget));
+        setMessage(result.ok ? "Cobrança criada." : result.error);
+        if (result.ok) {
+          event.currentTarget.reset();
+          setAmount("");
+          router.refresh();
+        }
+      }}
+    >
+      <Field label="Cliente">
+        <select name="clientId" required className={inputClass}>
+          {clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
+        </select>
+      </Field>
+      <Field label="Valor"><input name="amount" required placeholder="0,00" inputMode="numeric" className={inputClass} value={amount} onChange={(event) => setAmount(maskMoney(event.target.value))} /></Field>
+      <Field label="Vencimento"><input name="dueOn" type="date" defaultValue={today} className={inputClass} /></Field>
+      <Field label="Forma">
+        <select name="method" defaultValue="Pix" className={inputClass}>
+          <option>Pix</option>
+          <option>Boleto</option>
+          <option>Cartão de crédito</option>
+          <option>Transferência</option>
+        </select>
+      </Field>
+      <div className="md:col-span-2 flex items-center gap-3">
+        <button className={buttonClass} type="submit">Criar cobrança</button>
+        {message ? <span className="text-sm text-[#64748B]">{message}</span> : null}
+      </div>
+    </form>
+  );
+}
+
+export function ContractEditForm({ contractId, initial }: { contractId: string; initial: { description: string; startsOn: string; endsOn: string | null; terms: string } }) {
+  const router = useRouter();
+  const [message, setMessage] = useState("");
+  return (
+    <form
+      className="grid gap-3 md:grid-cols-2"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        const result = await editContractAction(contractId, new FormData(event.currentTarget));
+        setMessage(result.ok ? "Contrato atualizado." : result.error);
+        if (result.ok) router.refresh();
+      }}
+    >
+      <div className="md:col-span-2"><Field label="Descrição"><input name="description" required defaultValue={initial.description} className={inputClass} /></Field></div>
+      <Field label="Início"><input name="startsOn" type="date" defaultValue={initial.startsOn} className={inputClass} /></Field>
+      <Field label="Término (opcional)"><input name="endsOn" type="date" defaultValue={initial.endsOn ?? ""} className={inputClass} /></Field>
+      <div className="md:col-span-2"><Field label="Observações"><input name="terms" defaultValue={initial.terms} className={inputClass} /></Field></div>
+      <div className="md:col-span-2 flex items-center gap-3">
+        <button className={buttonClass} type="submit">Salvar contrato</button>
+        {message ? <span className="text-sm text-[#64748B]">{message}</span> : null}
+      </div>
+    </form>
+  );
+}
+
+export function RecurrenceEditForm({ recurrenceId, initial }: { recurrenceId: string; initial: { description: string; amountCents: number; endsOn: string | null } }) {
+  const router = useRouter();
+  const [message, setMessage] = useState("");
+  const [amount, setAmount] = useState(formatBRL(cents(initial.amountCents)).replace(/^R\$\s?/, ""));
+  return (
+    <form
+      className="grid gap-3 md:grid-cols-2"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        const result = await editRecurrenceAction(recurrenceId, new FormData(event.currentTarget));
+        setMessage(result.ok ? "Recorrência atualizada." : result.error);
+        if (result.ok) router.refresh();
+      }}
+    >
+      <div className="md:col-span-2"><Field label="Descrição"><input name="description" required defaultValue={initial.description} className={inputClass} /></Field></div>
+      <Field label="Valor"><input name="amount" required placeholder="0,00" inputMode="numeric" className={inputClass} value={amount} onChange={(event) => setAmount(maskMoney(event.target.value))} /></Field>
+      <Field label="Encerramento (opcional)"><input name="endsOn" type="date" defaultValue={initial.endsOn ?? ""} className={inputClass} /></Field>
+      <div className="md:col-span-2 flex items-center gap-3">
+        <button className={buttonClass} type="submit">Salvar recorrência</button>
+        {message ? <span className="text-sm text-[#64748B]">{message}</span> : null}
+      </div>
     </form>
   );
 }

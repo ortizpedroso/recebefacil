@@ -1,10 +1,12 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { Periodicity } from "./dates";
-import { addPeriod } from "./dates";
+import { addPeriod, periodIndexOnOrAfter } from "./dates";
 import type { DB } from "./db";
-import { cents, splitBalance, type Cents } from "./money";
-import { catalogItems, charges, clients, contracts, dueChanges, installments, payments, recurrences, saleItems, sales, stockMoves } from "./schema";
+import { cents, MAX_INSTALLMENTS, type Cents } from "./money";
+import { buildSchedule, MAX_ADJUST_BP, MAX_FINANCE_INTEREST_BP, scheduleTotal, type ScheduleRow } from "./schedule";
+import { catalogItems, charges, clients, contracts, dueChanges, fiscalDocuments, payments, recurrences, saleItems, sales, stockMoves } from "./schema";
+import { isOpen, settleStatus } from "./status";
 
 export class DomainError extends Error {}
 
@@ -26,6 +28,8 @@ export type SaleInput = {
   installmentCount: number;
   firstDue: string;
   periodicity: Periodicity;
+  interestMonthlyBp?: number;
+  adjustYearlyBp?: number;
   method: string;
   makeContract: boolean;
   items: ItemInput[];
@@ -39,14 +43,16 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-async function nextCode(db: DB, organizationId: string, prefix: string, table: "sales" | "charges" | "contracts") {
-  const rows =
-    table === "sales"
-      ? await db.select({ id: sales.id }).from(sales).where(eq(sales.organizationId, organizationId))
-      : table === "charges"
-        ? await db.select({ id: charges.id }).from(charges).where(eq(charges.organizationId, organizationId))
-        : await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.organizationId, organizationId));
-  return `${prefix}-${String(rows.length + 1).padStart(4, "0")}`;
+const CODE_COLUMN = { sales: "code", charges: "code", contracts: "number" } as const;
+
+// Só funciona dentro de transação: o lock vale até o commit e serializa quem aloca código na mesma empresa.
+async function nextCodes(db: DB, organizationId: string, prefix: string, table: keyof typeof CODE_COLUMN, count = 1) {
+  await db.execute(sql`select pg_advisory_xact_lock(hashtext(${`codigo:${organizationId}:${prefix}`}))`);
+  const result = await db.execute(
+    sql`select coalesce(max(substring(${sql.identifier(CODE_COLUMN[table])} from '^[A-Z]+-([0-9]+)$')::int), 0) as max from ${sql.identifier(table)} where organization_id = ${organizationId}`,
+  );
+  const max = Number((result.rows[0] as { max?: number | string } | undefined)?.max ?? 0);
+  return Array.from({ length: count }, (_, index) => `${prefix}-${String(max + index + 1).padStart(4, "0")}`);
 }
 
 function saleStatus(total: number, paid: number, cancelled: boolean) {
@@ -56,14 +62,13 @@ function saleStatus(total: number, paid: number, cancelled: boolean) {
   return "paga";
 }
 
-function openStatus(amount: number, paid: number, closed: string | null) {
-  if (closed) return closed;
-  if (paid <= 0) return "pendente";
-  if (paid < amount) return "parcial";
-  return "paga";
+const RECURRENCE_LABELS: Partial<Record<Periodicity, string>> = { mensal: "Mensalidade" };
+
+function recurrenceLabel(periodicity: Periodicity) {
+  return RECURRENCE_LABELS[periodicity] ?? "Cobrança recorrente";
 }
 
-export async function createSale(db: DB, organizationId: string, input: SaleInput) {
+async function validateSaleReferences(db: DB, organizationId: string, input: SaleInput) {
   const [client] = await db.select().from(clients).where(and(eq(clients.organizationId, organizationId), eq(clients.id, input.clientId)));
   if (!client) throw new DomainError("Cliente não encontrado.");
   for (const item of input.items) {
@@ -74,277 +79,559 @@ export async function createSale(db: DB, organizationId: string, input: SaleInpu
       .where(and(eq(catalogItems.organizationId, organizationId), eq(catalogItems.id, item.catalogItemId)));
     if (!catalog) throw new DomainError("Item do catálogo não encontrado.");
   }
+}
+
+type SalePlan = {
+  total: Cents;
+  entry: Cents;
+  count: number;
+  interestBp: number;
+  adjustBp: number;
+  periodicity: Periodicity | null;
+  rows: ScheduleRow[];
+};
+
+function planSale(input: SaleInput): SalePlan {
   const itemsTotal = input.items.reduce((sum, item) => sum + item.quantity * item.unitCents, 0);
   if (itemsTotal <= input.discountCents) throw new DomainError("O desconto zera a venda.");
   const total = cents(itemsTotal - input.discountCents);
-  const entry = input.mode === "parcelado" ? input.entryCents : cents(0);
+  if (input.mode === "avista") {
+    const rows = [{ number: 1, label: "À vista", dueOn: input.soldOn, amountCents: total }];
+    return { total, entry: cents(0), count: 1, interestBp: 0, adjustBp: 0, periodicity: null, rows };
+  }
+  if (input.mode === "recorrente") {
+    return { total, entry: cents(0), count: 1, interestBp: 0, adjustBp: 0, periodicity: input.periodicity, rows: [] };
+  }
+  const entry = input.entryCents;
   if (entry > total) throw new DomainError("A entrada passa do total.");
-  if (entry === total && input.mode === "parcelado") throw new DomainError("A entrada quita a venda. Use à vista.");
+  if (entry === total) throw new DomainError("A entrada quita a venda. Use à vista.");
+  const count = input.installmentCount;
+  if (!Number.isInteger(count) || count < 1 || count > MAX_INSTALLMENTS) {
+    throw new DomainError(`A quantidade de parcelas deve ficar entre 1 e ${MAX_INSTALLMENTS}.`);
+  }
+  const interestBp = input.interestMonthlyBp ?? 0;
+  const adjustBp = input.adjustYearlyBp ?? 0;
+  if (!Number.isInteger(interestBp) || interestBp < 0 || interestBp > MAX_FINANCE_INTEREST_BP) {
+    throw new DomainError("Os juros do financiamento vão de 0% a 10% ao mês.");
+  }
+  if (!Number.isInteger(adjustBp) || adjustBp < 0 || adjustBp > MAX_ADJUST_BP) {
+    throw new DomainError("O reajuste anual vai de 0% a 20%.");
+  }
+  const financed = cents(total - entry);
+  if (financed < count) throw new DomainError("O saldo não cobre um centavo por parcela.");
+  const rows = buildSchedule({
+    financedCents: financed,
+    entryCents: entry,
+    count,
+    firstDue: input.firstDue,
+    soldOn: input.soldOn,
+    periodicity: input.periodicity,
+    interestMonthlyBp: interestBp,
+    adjustYearlyBp: adjustBp,
+  });
+  if (rows.some((row) => row.amountCents <= 0)) throw new DomainError("O saldo é pequeno demais para essa quantidade de parcelas.");
+  return { total, entry, count, interestBp, adjustBp, periodicity: input.periodicity, rows };
+}
 
+type ChargeOrigin = { saleId: string | null; contractId: string | null; recurrenceId: string | null };
+
+function chargeRow(organizationId: string, clientId: string, code: string, origin: ChargeOrigin, method: string, row: { dueOn: string; amountCents: number; number: number | null; count: number | null; label: string | null }) {
+  return {
+    id: id(),
+    organizationId,
+    code,
+    clientId,
+    ...origin,
+    number: row.number,
+    count: row.count,
+    label: row.label,
+    amountCents: row.amountCents,
+    paidCents: 0,
+    dueOn: row.dueOn,
+    method,
+    status: "pendente",
+    paidOn: null,
+  };
+}
+
+async function insertScheduleCharges(tx: DB, organizationId: string, clientId: string, origin: ChargeOrigin, method: string, rows: ScheduleRow[]) {
+  const codes = await nextCodes(tx, organizationId, "COB", "charges", rows.length);
+  await tx.insert(charges).values(rows.map((row, index) => chargeRow(organizationId, clientId, codes[index], origin, method, { ...row, count: rows.length })));
+}
+
+async function consumeStock(tx: DB, organizationId: string, saleId: string, item: ItemInput) {
+  if (!item.catalogItemId) return;
+  const [updated] = await tx
+    .update(catalogItems)
+    .set({ stockQuantity: sql`${catalogItems.stockQuantity} - ${item.quantity}` })
+    .where(and(eq(catalogItems.organizationId, organizationId), eq(catalogItems.id, item.catalogItemId), isNotNull(catalogItems.stockQuantity), sql`${catalogItems.stockQuantity} >= ${item.quantity}`))
+    .returning({ id: catalogItems.id });
+  if (!updated) {
+    const [catalog] = await tx.select().from(catalogItems).where(and(eq(catalogItems.organizationId, organizationId), eq(catalogItems.id, item.catalogItemId)));
+    if (catalog && catalog.stockQuantity !== null) throw new DomainError(`Estoque insuficiente para ${item.description}.`);
+    return;
+  }
+  await tx.insert(stockMoves).values({ id: id(), organizationId, catalogItemId: updated.id, saleId, quantity: -item.quantity, reason: "venda", createdAt: nowIso() });
+}
+
+async function restoreStock(tx: DB, organizationId: string, saleId: string, reason: string) {
+  const items = await tx.select().from(saleItems).where(and(eq(saleItems.organizationId, organizationId), eq(saleItems.saleId, saleId)));
+  for (const item of items) {
+    if (!item.catalogItemId) continue;
+    const [updated] = await tx
+      .update(catalogItems)
+      .set({ stockQuantity: sql`${catalogItems.stockQuantity} + ${item.quantity}` })
+      .where(and(eq(catalogItems.organizationId, organizationId), eq(catalogItems.id, item.catalogItemId), isNotNull(catalogItems.stockQuantity)))
+      .returning({ id: catalogItems.id });
+    if (updated) {
+      await tx.insert(stockMoves).values({ id: id(), organizationId, catalogItemId: updated.id, saleId, quantity: item.quantity, reason, createdAt: nowIso() });
+    }
+  }
+}
+
+async function writeSaleChildren(tx: DB, organizationId: string, saleId: string, input: SaleInput, plan: SalePlan) {
+  for (const item of input.items) {
+    await tx.insert(saleItems).values({
+      id: id(),
+      organizationId,
+      saleId,
+      catalogItemId: item.catalogItemId,
+      description: item.description,
+      kind: item.kind,
+      quantity: item.quantity,
+      unitCents: item.unitCents,
+      totalCents: item.quantity * item.unitCents,
+    });
+    await consumeStock(tx, organizationId, saleId, item);
+  }
+
+  let contractId: string | null = null;
+  if (input.makeContract) {
+    contractId = id();
+    const [number] = await nextCodes(tx, organizationId, "CTR", "contracts");
+    await tx.insert(contracts).values({
+      id: contractId,
+      organizationId,
+      number,
+      clientId: input.clientId,
+      saleId,
+      description: input.items.map((item) => item.description).join(", "),
+      totalCents: plan.total,
+      startsOn: input.soldOn,
+      endsOn: input.mode === "parcelado" ? addPeriod(input.firstDue, input.periodicity, plan.count - 1) : null,
+      status: "ativo",
+      terms: input.mode === "recorrente" ? `Recorrência ${input.periodicity}` : input.mode === "parcelado" ? `Entrada e ${plan.count} parcelas` : "Pagamento à vista",
+    });
+  }
+
+  const origin = { saleId, contractId, recurrenceId: null };
+  if (input.mode === "recorrente") {
+    const recurrenceId = id();
+    await tx.insert(recurrences).values({
+      id: recurrenceId,
+      organizationId,
+      clientId: input.clientId,
+      catalogItemId: input.items[0]?.catalogItemId ?? null,
+      description: input.items.map((item) => item.description).join(", "),
+      amountCents: plan.total,
+      periodicity: input.periodicity,
+      startsOn: input.firstDue,
+      nextOn: addPeriod(input.firstDue, input.periodicity, 1),
+      endsOn: null,
+      status: "ativa",
+    });
+    const [code] = await nextCodes(tx, organizationId, "COB", "charges");
+    await tx.insert(charges).values(
+      chargeRow(organizationId, input.clientId, code, { ...origin, recurrenceId }, input.method, {
+        dueOn: input.firstDue,
+        amountCents: plan.total,
+        number: null,
+        count: null,
+        label: recurrenceLabel(input.periodicity),
+      }),
+    );
+    return;
+  }
+
+  await insertScheduleCharges(tx, organizationId, input.clientId, origin, input.method, plan.rows);
+  const [saved] = await tx
+    .select({ sum: sql<number>`coalesce(sum(${charges.amountCents}), 0)::int` })
+    .from(charges)
+    .where(and(eq(charges.organizationId, organizationId), eq(charges.saleId, saleId)));
+  const expected = scheduleTotal(plan.rows);
+  if (Number(saved?.sum ?? 0) !== expected) throw new DomainError("A soma das cobranças não fecha o total do cronograma.");
+  if (plan.interestBp === 0 && plan.adjustBp === 0 && expected !== plan.total) throw new DomainError("A soma das parcelas não fecha o total.");
+}
+
+function salePlanColumns(plan: SalePlan) {
+  return {
+    installmentCount: plan.count,
+    periodicity: plan.periodicity,
+    interestMonthlyBp: plan.interestBp,
+    adjustYearlyBp: plan.adjustBp,
+    entryCents: plan.entry,
+  };
+}
+
+export async function createSale(db: DB, organizationId: string, input: SaleInput) {
+  await validateSaleReferences(db, organizationId, input);
+  const plan = planSale(input);
   return db.transaction(async (tx) => {
+    const database = tx as DB;
     const saleId = id();
-    const code = await nextCode(tx as DB, organizationId, "VND", "sales");
-    await tx.insert(sales).values({
+    const [code] = await nextCodes(database, organizationId, "VND", "sales");
+    await database.insert(sales).values({
       id: saleId,
       organizationId,
       code,
       clientId: input.clientId,
       soldOn: input.soldOn,
       discountCents: input.discountCents,
-      totalCents: total,
+      totalCents: plan.total,
       notes: input.notes,
       mode: input.mode,
       status: "aguardando",
+      ...salePlanColumns(plan),
       createdAt: nowIso(),
     });
-    for (const item of input.items) {
-      await tx.insert(saleItems).values({
-        id: id(),
-        organizationId,
-        saleId,
-        catalogItemId: item.catalogItemId,
-        description: item.description,
-        kind: item.kind,
-        quantity: item.quantity,
-        unitCents: item.unitCents,
-        totalCents: item.quantity * item.unitCents,
-      });
-      if (!item.catalogItemId) continue;
-      const [catalog] = await tx
-        .select()
-        .from(catalogItems)
-        .where(and(eq(catalogItems.organizationId, organizationId), eq(catalogItems.id, item.catalogItemId)));
-      if (!catalog || catalog.stockQuantity === null) continue;
-      if (catalog.stockQuantity < item.quantity) throw new DomainError(`Estoque insuficiente para ${item.description}.`);
-      await tx.update(catalogItems).set({ stockQuantity: catalog.stockQuantity - item.quantity }).where(eq(catalogItems.id, catalog.id));
-      await tx.insert(stockMoves).values({
-        id: id(),
-        organizationId,
-        catalogItemId: catalog.id,
-        saleId,
-        quantity: -item.quantity,
-        reason: "venda",
-        createdAt: nowIso(),
-      });
-    }
-
-    const contractId = input.makeContract || input.mode !== "avista" ? id() : null;
-    if (contractId) {
-      const number = await nextCode(tx as DB, organizationId, "CTR", "contracts");
-      await tx.insert(contracts).values({
-        id: contractId,
-        organizationId,
-        number,
-        clientId: input.clientId,
-        saleId,
-        description: input.items.map((item) => item.description).join(", "),
-        totalCents: total,
-        startsOn: input.soldOn,
-        endsOn: input.mode === "parcelado" ? addPeriod(input.firstDue, input.periodicity, input.installmentCount - 1) : null,
-        status: "ativo",
-        terms: input.mode === "recorrente" ? `Recorrência ${input.periodicity}` : `Entrada e ${input.installmentCount} parcelas`,
-      });
-    }
-
-    const schedule: { label: string; dueOn: string; amount: Cents; number: number; count: number }[] = [];
-    if (input.mode === "avista") {
-      schedule.push({ label: "À vista", dueOn: input.soldOn, amount: total, number: 1, count: 1 });
-    } else if (input.mode === "parcelado") {
-      const parts = splitBalance(cents(total - entry), input.installmentCount);
-      const count = parts.length + (entry > 0 ? 1 : 0);
-      if (entry > 0) schedule.push({ label: "Entrada", dueOn: input.soldOn, amount: entry, number: 1, count });
-      parts.forEach((amount, index) => {
-        schedule.push({
-          label: `Parcela ${index + 1}/${parts.length}`,
-          dueOn: addPeriod(input.firstDue, input.periodicity, index),
-          amount,
-          number: schedule.length + 1,
-          count,
-        });
-      });
-    }
-
-    for (const part of schedule) {
-      const installmentId = id();
-      const chargeId = id();
-      const chargeCode = await nextCode(tx as DB, organizationId, "COB", "charges");
-      await tx.insert(installments).values({
-        id: installmentId,
-        organizationId,
-        saleId,
-        contractId,
-        clientId: input.clientId,
-        number: part.number,
-        count: part.count,
-        label: part.label,
-        dueOn: part.dueOn,
-        amountCents: part.amount,
-        paidCents: 0,
-        status: "pendente",
-      });
-      await tx.insert(charges).values({
-        id: chargeId,
-        organizationId,
-        code: chargeCode,
-        clientId: input.clientId,
-        saleId,
-        contractId,
-        installmentId,
-        recurrenceId: null,
-        amountCents: part.amount,
-        paidCents: 0,
-        dueOn: part.dueOn,
-        method: input.method,
-        status: "pendente",
-        paidOn: null,
-      });
-    }
-
-    if (input.mode === "recorrente") {
-      const recurrenceId = id();
-      const chargeId = id();
-      const chargeCode = await nextCode(tx as DB, organizationId, "COB", "charges");
-      await tx.insert(recurrences).values({
-        id: recurrenceId,
-        organizationId,
-        clientId: input.clientId,
-        catalogItemId: input.items[0]?.catalogItemId ?? null,
-        description: input.items.map((item) => item.description).join(", "),
-        amountCents: total,
-        periodicity: input.periodicity,
-        startsOn: input.firstDue,
-        nextOn: addPeriod(input.firstDue, input.periodicity, 1),
-        endsOn: null,
-        status: "ativa",
-      });
-      await tx.insert(charges).values({
-        id: chargeId,
-        organizationId,
-        code: chargeCode,
-        clientId: input.clientId,
-        saleId,
-        contractId,
-        installmentId: null,
-        recurrenceId,
-        amountCents: total,
-        paidCents: 0,
-        dueOn: input.firstDue,
-        method: input.method,
-        status: "pendente",
-        paidOn: null,
-      });
-    }
-
-    const saved = await tx.select().from(installments).where(and(eq(installments.organizationId, organizationId), eq(installments.saleId, saleId)));
-    const sum = saved.reduce((totalPaid, row) => totalPaid + row.amountCents, 0);
-    if (input.mode !== "recorrente" && sum !== total) throw new DomainError("A soma das parcelas não fecha o total.");
+    await writeSaleChildren(database, organizationId, saleId, input, plan);
     return saleId;
   });
+}
+
+async function lockSaleCharges(tx: DB, organizationId: string, saleId: string) {
+  const [sale] = await tx
+    .select()
+    .from(sales)
+    .where(and(eq(sales.organizationId, organizationId), eq(sales.id, saleId)))
+    .for("update");
+  if (!sale) throw new DomainError("Venda não encontrada.");
+  const rows = await tx
+    .select()
+    .from(charges)
+    .where(and(eq(charges.organizationId, organizationId), eq(charges.saleId, saleId)))
+    .for("update");
+  return { sale, rows };
+}
+
+async function deleteChargesOf(tx: DB, organizationId: string, chargeIds: string[]) {
+  if (chargeIds.length === 0) return;
+  await tx.delete(dueChanges).where(and(eq(dueChanges.organizationId, organizationId), inArray(dueChanges.chargeId, chargeIds)));
+  await tx.delete(payments).where(and(eq(payments.organizationId, organizationId), inArray(payments.chargeId, chargeIds)));
+  await tx.delete(charges).where(and(eq(charges.organizationId, organizationId), inArray(charges.id, chargeIds)));
+}
+
+async function deleteRecurrencesOf(tx: DB, organizationId: string, chargeRows: { recurrenceId: string | null }[]) {
+  const recurrenceIds = [...new Set(chargeRows.map((charge) => charge.recurrenceId).filter((value): value is string => Boolean(value)))];
+  if (recurrenceIds.length === 0) return;
+  await tx.delete(recurrences).where(and(eq(recurrences.organizationId, organizationId), inArray(recurrences.id, recurrenceIds)));
+}
+
+export async function updateSale(db: DB, organizationId: string, saleId: string, input: SaleInput) {
+  await validateSaleReferences(db, organizationId, input);
+  const plan = planSale(input);
+  return db.transaction(async (tx) => {
+    const database = tx as DB;
+    const { sale, rows } = await lockSaleCharges(database, organizationId, saleId);
+    if (sale.status === "cancelada") throw new DomainError("Venda cancelada não pode ser editada.");
+    if (rows.some((charge) => charge.paidCents > 0)) throw new DomainError("Estorne os recebimentos antes de editar a venda.");
+    await restoreStock(database, organizationId, saleId, "edicao");
+    await database.delete(saleItems).where(and(eq(saleItems.organizationId, organizationId), eq(saleItems.saleId, saleId)));
+    await deleteChargesOf(database, organizationId, rows.map((charge) => charge.id));
+    await database.delete(contracts).where(and(eq(contracts.organizationId, organizationId), eq(contracts.saleId, saleId)));
+    await deleteRecurrencesOf(database, organizationId, rows);
+    await database
+      .update(sales)
+      .set({
+        clientId: input.clientId,
+        soldOn: input.soldOn,
+        discountCents: input.discountCents,
+        totalCents: plan.total,
+        notes: input.notes,
+        mode: input.mode,
+        status: "aguardando",
+        ...salePlanColumns(plan),
+      })
+      .where(eq(sales.id, saleId));
+    await writeSaleChildren(database, organizationId, saleId, input, plan);
+    return saleId;
+  });
+}
+
+export type ContractInput = {
+  clientId: string;
+  description: string;
+  totalCents: Cents;
+  startsOn: string;
+  endsOn: string | null;
+  terms: string;
+  installmentCount: number;
+  firstDue: string;
+  periodicity: Periodicity;
+  method: string;
+};
+
+const MAX_CONTRACT_INSTALLMENTS = 60;
+
+export async function createContract(db: DB, organizationId: string, input: ContractInput) {
+  if (!Number.isInteger(input.installmentCount) || input.installmentCount < 1 || input.installmentCount > MAX_CONTRACT_INSTALLMENTS) {
+    throw new DomainError(`A quantidade de parcelas deve ficar entre 1 e ${MAX_CONTRACT_INSTALLMENTS}.`);
+  }
+  if (input.totalCents < input.installmentCount) throw new DomainError("O valor não cobre um centavo por parcela.");
+  const [client] = await db.select().from(clients).where(and(eq(clients.organizationId, organizationId), eq(clients.id, input.clientId)));
+  if (!client) throw new DomainError("Cliente não encontrado.");
+  const rows = buildSchedule({
+    financedCents: input.totalCents,
+    entryCents: cents(0),
+    count: input.installmentCount,
+    firstDue: input.firstDue,
+    soldOn: input.startsOn,
+    periodicity: input.periodicity,
+    interestMonthlyBp: 0,
+    adjustYearlyBp: 0,
+  });
+  return db.transaction(async (tx) => {
+    const database = tx as DB;
+    const contractId = id();
+    const [number] = await nextCodes(database, organizationId, "CTR", "contracts");
+    await database.insert(contracts).values({
+      id: contractId,
+      organizationId,
+      number,
+      clientId: input.clientId,
+      saleId: null,
+      description: input.description,
+      totalCents: input.totalCents,
+      startsOn: input.startsOn,
+      endsOn: input.endsOn,
+      status: "ativo",
+      terms: input.terms,
+    });
+    await insertScheduleCharges(database, organizationId, input.clientId, { saleId: null, contractId, recurrenceId: null }, input.method, rows);
+    return contractId;
+  });
+}
+
+export type RecurrenceInput = {
+  clientId: string;
+  description: string;
+  amountCents: Cents;
+  periodicity: Periodicity;
+  startsOn: string;
+  endsOn: string | null;
+  method: string;
+};
+
+export async function createRecurrence(db: DB, organizationId: string, input: RecurrenceInput) {
+  const [client] = await db.select().from(clients).where(and(eq(clients.organizationId, organizationId), eq(clients.id, input.clientId)));
+  if (!client) throw new DomainError("Cliente não encontrado.");
+  return db.transaction(async (tx) => {
+    const database = tx as DB;
+    const recurrenceId = id();
+    await database.insert(recurrences).values({
+      id: recurrenceId,
+      organizationId,
+      clientId: input.clientId,
+      catalogItemId: null,
+      description: input.description,
+      amountCents: input.amountCents,
+      periodicity: input.periodicity,
+      startsOn: input.startsOn,
+      nextOn: addPeriod(input.startsOn, input.periodicity, 1),
+      endsOn: input.endsOn,
+      status: "ativa",
+    });
+    const [code] = await nextCodes(database, organizationId, "COB", "charges");
+    await database.insert(charges).values(
+      chargeRow(organizationId, input.clientId, code, { saleId: null, contractId: null, recurrenceId }, input.method, {
+        dueOn: input.startsOn,
+        amountCents: input.amountCents,
+        number: null,
+        count: null,
+        label: recurrenceLabel(input.periodicity),
+      }),
+    );
+    return recurrenceId;
+  });
+}
+
+export type ChargeInput = {
+  clientId: string;
+  amountCents: Cents;
+  dueOn: string;
+  method: string;
+};
+
+export async function createCharge(db: DB, organizationId: string, input: ChargeInput) {
+  const [client] = await db.select().from(clients).where(and(eq(clients.organizationId, organizationId), eq(clients.id, input.clientId)));
+  if (!client) throw new DomainError("Cliente não encontrado.");
+  return db.transaction(async (tx) => {
+    const database = tx as DB;
+    const [code] = await nextCodes(database, organizationId, "COB", "charges");
+    const row = chargeRow(organizationId, input.clientId, code, { saleId: null, contractId: null, recurrenceId: null }, input.method, {
+      dueOn: input.dueOn,
+      amountCents: input.amountCents,
+      number: null,
+      count: null,
+      label: null,
+    });
+    await database.insert(charges).values(row);
+    return row.id;
+  });
+}
+
+export async function updateContract(
+  db: DB,
+  organizationId: string,
+  contractId: string,
+  input: { description: string; startsOn: string; endsOn: string | null; terms: string },
+) {
+  const [contract] = await db.select().from(contracts).where(and(eq(contracts.organizationId, organizationId), eq(contracts.id, contractId)));
+  if (!contract) throw new DomainError("Contrato não encontrado.");
+  await db
+    .update(contracts)
+    .set({ description: input.description, startsOn: input.startsOn, endsOn: input.endsOn, terms: input.terms })
+    .where(eq(contracts.id, contractId));
+}
+
+export async function updateRecurrence(
+  db: DB,
+  organizationId: string,
+  recurrenceId: string,
+  input: { description: string; amountCents: Cents; endsOn: string | null },
+) {
+  if (input.amountCents <= 0) throw new DomainError("O valor precisa ser maior que zero.");
+  const [recurrence] = await db.select().from(recurrences).where(and(eq(recurrences.organizationId, organizationId), eq(recurrences.id, recurrenceId)));
+  if (!recurrence) throw new DomainError("Recorrência não encontrada.");
+  await db
+    .update(recurrences)
+    .set({ description: input.description, amountCents: input.amountCents, endsOn: input.endsOn })
+    .where(eq(recurrences.id, recurrenceId));
 }
 
 async function refreshSale(tx: DB, organizationId: string, saleId: string) {
   const [sale] = await tx.select().from(sales).where(and(eq(sales.organizationId, organizationId), eq(sales.id, saleId)));
   if (!sale || sale.status === "cancelada") return;
-  const rows = await tx.select().from(charges).where(and(eq(charges.organizationId, organizationId), eq(charges.saleId, saleId)));
-  const paid = rows.filter((row) => row.status !== "cancelada" && row.status !== "estornada").reduce((sum, row) => sum + row.paidCents, 0);
-  await tx.update(sales).set({ status: saleStatus(sale.totalCents, paid, false) }).where(eq(sales.id, saleId));
+  const rows = await tx
+    .select()
+    .from(charges)
+    .where(and(eq(charges.organizationId, organizationId), eq(charges.saleId, saleId), ne(charges.status, "cancelada")));
+  const paid = rows.reduce((sum, row) => sum + row.paidCents, 0);
+  // Venda recorrente ganha cobranças a cada ciclo, então o esperado é um ciclo. As demais esperam o cronograma inteiro.
+  const expected = sale.mode === "recorrente" ? sale.totalCents : rows.reduce((sum, row) => sum + row.amountCents, 0);
+  await tx.update(sales).set({ status: saleStatus(expected, paid, false) }).where(eq(sales.id, saleId));
 }
 
 export async function registerPayment(
   db: DB,
   organizationId: string,
-  input: { chargeId: string; amountCents: Cents; paidOn: string; method: string; note: string; idempotencyKey?: string },
+  input: { chargeId: string; amountCents: Cents; feeCents?: Cents; paidOn: string; method: string; note: string; idempotencyKey?: string },
 ) {
+  if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) throw new DomainError("O valor precisa ser maior que zero.");
+  const feeCents = input.feeCents ?? 0;
+  if (!Number.isInteger(feeCents) || feeCents < 0) throw new DomainError("Multa e juros não podem ser negativos.");
   return db.transaction(async (tx) => {
     const database = tx as DB;
-    if (input.idempotencyKey) {
-      const [existing] = await database
-        .select()
-        .from(payments)
-        .where(and(eq(payments.organizationId, organizationId), eq(payments.idempotencyKey, input.idempotencyKey)));
-      if (existing) {
-        if (existing.amountCents !== input.amountCents) throw new DomainError("A mesma chave veio com outro valor.");
-        return existing.id;
-      }
-    }
     const [charge] = await database
       .select()
       .from(charges)
       .where(and(eq(charges.organizationId, organizationId), eq(charges.id, input.chargeId)));
     if (!charge) throw new DomainError("Cobrança não encontrada.");
-    if (charge.status === "cancelada" || charge.status === "estornada") throw new DomainError("Esta cobrança não aceita pagamento.");
-    const open = charge.amountCents - charge.paidCents;
-    if (input.amountCents > open) throw new DomainError("O pagamento passa do saldo.");
-    const paymentId = id();
-    await database.insert(payments).values({
-      id: paymentId,
-      organizationId,
-      chargeId: charge.id,
-      installmentId: charge.installmentId,
-      amountCents: input.amountCents,
-      paidOn: input.paidOn,
-      method: input.method,
-      note: input.note,
-      idempotencyKey: input.idempotencyKey ?? null,
-      reversedAt: null,
-    });
-    const paid = charge.paidCents + input.amountCents;
-    await database
-      .update(charges)
-      .set({ paidCents: paid, status: openStatus(charge.amountCents, paid, null), paidOn: input.paidOn })
-      .where(eq(charges.id, charge.id));
-    if (charge.installmentId) {
-      const [installment] = await database.select().from(installments).where(eq(installments.id, charge.installmentId));
-      if (installment) {
-        const installmentPaid = installment.paidCents + input.amountCents;
-        await database
-          .update(installments)
-          .set({ paidCents: installmentPaid, status: openStatus(installment.amountCents, installmentPaid, null) })
-          .where(eq(installments.id, installment.id));
+    const [inserted] = await database
+      .insert(payments)
+      .values({
+        id: id(),
+        organizationId,
+        chargeId: charge.id,
+        amountCents: input.amountCents,
+        feeCents,
+        paidOn: input.paidOn,
+        method: input.method,
+        note: input.note,
+        idempotencyKey: input.idempotencyKey ?? null,
+        reversedAt: null,
+      })
+      .onConflictDoNothing({ target: [payments.organizationId, payments.idempotencyKey] })
+      .returning({ id: payments.id });
+    if (!inserted) {
+      const [existing] = await database
+        .select()
+        .from(payments)
+        .where(and(eq(payments.organizationId, organizationId), eq(payments.idempotencyKey, input.idempotencyKey ?? "")));
+      if (!existing || existing.chargeId !== charge.id || existing.amountCents !== input.amountCents) {
+        throw new DomainError("A mesma chave veio com outro valor.");
       }
+      return existing.id;
     }
-    if (charge.saleId) await refreshSale(database, organizationId, charge.saleId);
-    return paymentId;
+    // Uma instrução só decide saldo e bloqueio, então dois pagamentos simultâneos nunca passam do valor.
+    const [updated] = await database
+      .update(charges)
+      .set({ paidCents: sql`${charges.paidCents} + ${input.amountCents}`, paidOn: input.paidOn })
+      .where(
+        and(
+          eq(charges.organizationId, organizationId),
+          eq(charges.id, charge.id),
+          ne(charges.status, "cancelada"),
+          sql`${charges.paidCents} + ${input.amountCents} <= ${charges.amountCents}`,
+        ),
+      )
+      .returning();
+    if (!updated) {
+      const [fresh] = await database.select().from(charges).where(eq(charges.id, charge.id));
+      throw new DomainError(fresh?.status === "cancelada" ? "Esta cobrança não aceita pagamento." : "O pagamento passa do saldo.");
+    }
+    await database.update(charges).set({ status: settleStatus(updated) }).where(eq(charges.id, updated.id));
+    if (updated.saleId) await refreshSale(database, organizationId, updated.saleId);
+    return inserted.id;
   });
 }
 
 export async function reverseCharge(db: DB, organizationId: string, chargeId: string) {
   return db.transaction(async (tx) => {
     const database = tx as DB;
-    const [charge] = await database.select().from(charges).where(and(eq(charges.organizationId, organizationId), eq(charges.id, chargeId)));
+    const [charge] = await database
+      .select()
+      .from(charges)
+      .where(and(eq(charges.organizationId, organizationId), eq(charges.id, chargeId)))
+      .for("update");
     if (!charge) throw new DomainError("Cobrança não encontrada.");
-    if (charge.status === "estornada") return;
-    const rows = await database.select().from(payments).where(and(eq(payments.organizationId, organizationId), eq(payments.chargeId, chargeId)));
-    for (const payment of rows) {
-      if (!payment.reversedAt) {
-        await database.update(payments).set({ reversedAt: nowIso() }).where(eq(payments.id, payment.id));
-      }
-    }
-    await database.update(charges).set({ paidCents: 0, status: "estornada", paidOn: null }).where(eq(charges.id, chargeId));
-    if (charge.installmentId) {
-      await database.update(installments).set({ paidCents: 0, status: "pendente" }).where(eq(installments.id, charge.installmentId));
-    }
+    await database
+      .update(payments)
+      .set({ reversedAt: nowIso() })
+      .where(and(eq(payments.organizationId, organizationId), eq(payments.chargeId, chargeId), isNull(payments.reversedAt)));
+    const [standing] = await database
+      .select({ paid: sql<number>`coalesce(sum(${payments.amountCents}), 0)::int`, lastPaidOn: sql<string | null>`max(${payments.paidOn})` })
+      .from(payments)
+      .where(and(eq(payments.organizationId, organizationId), eq(payments.chargeId, chargeId), isNull(payments.reversedAt)));
+    const paidCents = Number(standing?.paid ?? 0);
+    await database
+      .update(charges)
+      .set({ paidCents, paidOn: standing?.lastPaidOn ?? null, status: settleStatus({ ...charge, paidCents }) })
+      .where(eq(charges.id, chargeId));
     if (charge.saleId) await refreshSale(database, organizationId, charge.saleId);
   });
 }
 
-export async function changeDueDate(db: DB, organizationId: string, installmentId: string, dueOn: string) {
-  const [installment] = await db
-    .select()
-    .from(installments)
-    .where(and(eq(installments.organizationId, organizationId), eq(installments.id, installmentId)));
-  if (!installment) throw new DomainError("Parcela não encontrada.");
-  if (installment.status === "paga" || installment.status === "cancelada") throw new DomainError("Esta parcela não muda de vencimento.");
-  await db.insert(dueChanges).values({
-    id: id(),
-    organizationId,
-    installmentId,
-    previousDue: installment.dueOn,
-    nextDue: dueOn,
-    createdAt: nowIso(),
+export async function changeDueDate(db: DB, organizationId: string, chargeId: string, dueOn: string) {
+  return db.transaction(async (tx) => {
+    const database = tx as DB;
+    const [charge] = await database
+      .select()
+      .from(charges)
+      .where(and(eq(charges.organizationId, organizationId), eq(charges.id, chargeId)))
+      .for("update");
+    if (!charge) throw new DomainError("Cobrança não encontrada.");
+    if (!isOpen(charge)) throw new DomainError("Esta cobrança não muda de vencimento.");
+    await database.insert(dueChanges).values({
+      id: id(),
+      organizationId,
+      chargeId,
+      previousDue: charge.dueOn,
+      nextDue: dueOn,
+      createdAt: nowIso(),
+    });
+    await database.update(charges).set({ dueOn }).where(eq(charges.id, chargeId));
   });
-  await db.update(installments).set({ dueOn }).where(eq(installments.id, installmentId));
-  await db.update(charges).set({ dueOn }).where(and(eq(charges.organizationId, organizationId), eq(charges.installmentId, installmentId)));
 }
 
 export async function setRecurrenceStatus(db: DB, organizationId: string, recurrenceId: string, status: "ativa" | "suspensa" | "cancelada") {
@@ -358,59 +645,82 @@ export async function setContractStatus(db: DB, organizationId: string, contract
 }
 
 export async function cancelSale(db: DB, organizationId: string, saleId: string) {
-  const [sale] = await db.select().from(sales).where(and(eq(sales.organizationId, organizationId), eq(sales.id, saleId)));
-  if (!sale) throw new DomainError("Venda não encontrada.");
-  if (sale.status === "cancelada") return;
-  const rows = await db.select().from(charges).where(and(eq(charges.organizationId, organizationId), eq(charges.saleId, saleId)));
-  if (rows.some((row) => row.paidCents > 0 && row.status !== "estornada")) {
-    throw new DomainError("Estorne os recebimentos antes de cancelar a venda.");
-  }
   await db.transaction(async (tx) => {
-    await tx.update(sales).set({ status: "cancelada" }).where(eq(sales.id, saleId));
-    await tx.update(installments).set({ status: "cancelada" }).where(and(eq(installments.organizationId, organizationId), eq(installments.saleId, saleId)));
-    await tx.update(charges).set({ status: "cancelada" }).where(and(eq(charges.organizationId, organizationId), eq(charges.saleId, saleId)));
-    await tx.update(contracts).set({ status: "encerrado" }).where(and(eq(contracts.organizationId, organizationId), eq(contracts.saleId, saleId)));
+    const database = tx as DB;
+    const { sale, rows } = await lockSaleCharges(database, organizationId, saleId);
+    if (sale.status === "cancelada") return;
+    if (rows.some((row) => row.paidCents > 0)) throw new DomainError("Estorne os recebimentos antes de cancelar a venda.");
+    await restoreStock(database, organizationId, saleId, "cancelamento");
+    await database.update(sales).set({ status: "cancelada" }).where(eq(sales.id, saleId));
+    await database.update(charges).set({ status: "cancelada" }).where(and(eq(charges.organizationId, organizationId), eq(charges.saleId, saleId)));
+    await database.update(contracts).set({ status: "encerrado" }).where(and(eq(contracts.organizationId, organizationId), eq(contracts.saleId, saleId)));
+    const recurrenceIds = [...new Set(rows.map((row) => row.recurrenceId).filter((value): value is string => Boolean(value)))];
+    if (recurrenceIds.length > 0) {
+      await database.update(recurrences).set({ status: "cancelada" }).where(and(eq(recurrences.organizationId, organizationId), inArray(recurrences.id, recurrenceIds)));
+    }
   });
 }
 
+export async function deleteSale(db: DB, organizationId: string, saleId: string) {
+  return db.transaction(async (tx) => {
+    const database = tx as DB;
+    const { sale, rows } = await lockSaleCharges(database, organizationId, saleId);
+    if (sale.status === "cancelada") throw new DomainError("Venda cancelada não pode ser excluída.");
+    if (rows.some((charge) => charge.paidCents > 0)) throw new DomainError("Estorne os recebimentos antes de excluir a venda.");
+    await restoreStock(database, organizationId, saleId, "exclusao");
+    await deleteChargesOf(database, organizationId, rows.map((charge) => charge.id));
+    await database.delete(stockMoves).where(and(eq(stockMoves.organizationId, organizationId), eq(stockMoves.saleId, saleId)));
+    await database.delete(saleItems).where(and(eq(saleItems.organizationId, organizationId), eq(saleItems.saleId, saleId)));
+    await database.delete(contracts).where(and(eq(contracts.organizationId, organizationId), eq(contracts.saleId, saleId)));
+    await database.delete(fiscalDocuments).where(and(eq(fiscalDocuments.organizationId, organizationId), eq(fiscalDocuments.saleId, saleId)));
+    await deleteRecurrencesOf(database, organizationId, rows);
+    await database.delete(sales).where(eq(sales.id, saleId));
+  });
+}
+
+const MAX_CYCLES_PER_PASS = 24;
+
 export async function advanceRecurrences(db: DB, organizationId: string, today: string) {
-  const rows = await db.select().from(recurrences).where(and(eq(recurrences.organizationId, organizationId), eq(recurrences.status, "ativa")));
-  for (const recurrence of rows) {
-    let next = recurrence.nextOn;
-    let guard = 0;
-    while (next <= today && guard < 24) {
+  const active = await db.select().from(recurrences).where(and(eq(recurrences.organizationId, organizationId), eq(recurrences.status, "ativa")));
+  for (const recurrence of active) {
+    const periodicity = recurrence.periodicity as Periodicity;
+    // Cada vencimento parte do dia original. Encadear de mês em mês deixaria 31 de janeiro virar dia 28 para sempre.
+    let index = periodIndexOnOrAfter(recurrence.startsOn, periodicity, recurrence.nextOn);
+    let next = addPeriod(recurrence.startsOn, periodicity, index);
+    const due: string[] = [];
+    while (next <= today && due.length < MAX_CYCLES_PER_PASS) {
       if (recurrence.endsOn && next > recurrence.endsOn) break;
-      const [existing] = await db
-        .select()
-        .from(charges)
-        .where(and(eq(charges.organizationId, organizationId), eq(charges.recurrenceId, recurrence.id), eq(charges.dueOn, next)));
-      if (!existing) {
-        const [sample] = await db
+      due.push(next);
+      index += 1;
+      next = addPeriod(recurrence.startsOn, periodicity, index);
+    }
+    if (due.length === 0 && next === recurrence.nextOn) continue;
+    await db.transaction(async (tx) => {
+      const database = tx as DB;
+      if (due.length > 0) {
+        const [sample] = await database
           .select()
           .from(charges)
-          .where(and(eq(charges.organizationId, organizationId), eq(charges.recurrenceId, recurrence.id)));
-        await db.insert(charges).values({
-          id: id(),
-          organizationId,
-          code: await nextCode(db, organizationId, "COB", "charges"),
-          clientId: recurrence.clientId,
-          saleId: sample?.saleId ?? null,
-          contractId: sample?.contractId ?? null,
-          installmentId: null,
-          recurrenceId: recurrence.id,
-          amountCents: recurrence.amountCents,
-          paidCents: 0,
-          dueOn: next,
-          method: sample?.method ?? "Pix",
-          status: "pendente",
-          paidOn: null,
-        });
+          .where(and(eq(charges.organizationId, organizationId), eq(charges.recurrenceId, recurrence.id)))
+          .limit(1);
+        const codes = await nextCodes(database, organizationId, "COB", "charges", due.length);
+        for (const [position, dueOn] of due.entries()) {
+          await database
+            .insert(charges)
+            .values(
+              chargeRow(
+                organizationId,
+                recurrence.clientId,
+                codes[position],
+                { saleId: sample?.saleId ?? null, contractId: sample?.contractId ?? null, recurrenceId: recurrence.id },
+                sample?.method ?? "Pix",
+                { dueOn, amountCents: recurrence.amountCents, number: null, count: null, label: recurrenceLabel(periodicity) },
+              ),
+            )
+            .onConflictDoNothing({ target: [charges.recurrenceId, charges.dueOn], where: sql`recurrence_id is not null` });
+        }
       }
-      next = addPeriod(next, recurrence.periodicity as Periodicity, 1);
-      guard += 1;
-    }
-    if (next !== recurrence.nextOn) {
-      await db.update(recurrences).set({ nextOn: next }).where(eq(recurrences.id, recurrence.id));
-    }
+      await database.update(recurrences).set({ nextOn: next }).where(eq(recurrences.id, recurrence.id));
+    });
   }
 }

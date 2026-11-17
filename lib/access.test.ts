@@ -8,4 +8,11 @@ test("o papel limita a ação", () => {
   assert.equal(can("operador", "pagamentos.estornar"), false);
   assert.equal(can("financeiro", "fiscal.emitir"), true);
   assert.equal(can("vendedor", "assinatura.gerir"), false);
+  assert.equal(can("vendedor", "vendas.editar"), true);
+  assert.equal(can("operador", "vendas.editar"), false);
+  assert.equal(can("vendedor", "vendas.excluir"), true);
+  assert.equal(can("operador", "vendas.excluir"), false);
+  assert.equal(can("financeiro", "cobrancas.gravar"), true);
+  assert.equal(can("operador", "cobrancas.gravar"), false);
+  assert.equal(can("vendedor", "cobrancas.gravar"), false);
 });

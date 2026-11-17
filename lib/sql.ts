@@ -12,6 +12,8 @@ create table if not exists organizations (
   asaas_environment text not null,
   asaas_connected boolean not null,
   asaas_synced_at text,
+  late_fine_bp integer not null default 200 check (late_fine_bp between 0 and 200),
+  late_interest_monthly_bp integer not null default 100 check (late_interest_monthly_bp between 0 and 1000),
   created_at text not null
 );
 create table if not exists members (
@@ -69,6 +71,11 @@ create table if not exists sales (
   notes text not null,
   mode text not null,
   status text not null,
+  installment_count integer,
+  periodicity text,
+  interest_monthly_bp integer not null default 0,
+  adjust_yearly_bp integer not null default 0,
+  entry_cents integer not null default 0,
   created_at text not null,
   check (discount_cents >= 0),
   check (total_cents > 0)
@@ -93,7 +100,7 @@ create table if not exists contracts (
   organization_id text not null references organizations(id),
   number text not null,
   client_id text not null references clients(id),
-  sale_id text not null references sales(id),
+  sale_id text references sales(id),
   description text not null,
   total_cents integer not null,
   starts_on text not null,
@@ -102,24 +109,6 @@ create table if not exists contracts (
   terms text not null
 );
 create index if not exists contracts_org on contracts (organization_id);
-create table if not exists installments (
-  id text primary key,
-  organization_id text not null references organizations(id),
-  sale_id text not null references sales(id),
-  contract_id text,
-  client_id text not null references clients(id),
-  number integer not null,
-  count integer not null,
-  label text not null,
-  due_on text not null,
-  amount_cents integer not null,
-  paid_cents integer not null,
-  status text not null,
-  check (amount_cents > 0),
-  check (paid_cents >= 0),
-  check (paid_cents <= amount_cents)
-);
-create index if not exists installments_org_due on installments (organization_id, due_on);
 create table if not exists recurrences (
   id text primary key,
   organization_id text not null references organizations(id),
@@ -141,8 +130,10 @@ create table if not exists charges (
   client_id text not null references clients(id),
   sale_id text,
   contract_id text,
-  installment_id text,
   recurrence_id text,
+  number integer,
+  count integer,
+  label text,
   amount_cents integer not null,
   paid_cents integer not null,
   due_on text not null,
@@ -158,8 +149,8 @@ create table if not exists payments (
   id text primary key,
   organization_id text not null references organizations(id),
   charge_id text not null references charges(id),
-  installment_id text,
   amount_cents integer not null,
+  fee_cents integer not null default 0 check (fee_cents >= 0),
   paid_on text not null,
   method text not null,
   note text not null,
@@ -183,7 +174,8 @@ create index if not exists contacts_org on contacts (organization_id);
 create table if not exists due_changes (
   id text primary key,
   organization_id text not null references organizations(id),
-  installment_id text not null references installments(id),
+  installment_id text,
+  charge_id text references charges(id),
   previous_due text not null,
   next_due text not null,
   created_at text not null
@@ -264,4 +256,52 @@ create table if not exists error_events (
   message text not null,
   created_at text not null
 );
+alter table contracts alter column sale_id drop not null;
+alter table organizations add column if not exists late_fine_bp integer not null default 200 check (late_fine_bp between 0 and 200);
+alter table organizations add column if not exists late_interest_monthly_bp integer not null default 100 check (late_interest_monthly_bp between 0 and 1000);
+alter table sales add column if not exists installment_count integer;
+alter table sales add column if not exists periodicity text;
+alter table sales add column if not exists interest_monthly_bp integer not null default 0;
+alter table sales add column if not exists adjust_yearly_bp integer not null default 0;
+alter table sales add column if not exists entry_cents integer not null default 0;
+alter table charges add column if not exists number integer;
+alter table charges add column if not exists count integer;
+alter table charges add column if not exists label text;
+alter table payments add column if not exists fee_cents integer not null default 0 check (fee_cents >= 0);
+alter table due_changes add column if not exists charge_id text references charges(id);
+alter table due_changes alter column installment_id drop not null;
 `;
+
+// Blocos com ponto e vírgula interno rodam inteiros, na ordem, depois do SCHEMA_SQL.
+// Todos convergem para o mesmo estado se rodarem de novo.
+const dedupe = (table: string, column: string, order: string) =>
+  `update ${table} t set ${column} = t.${column} || '-' || d.rn from (select id, row_number() over (partition by organization_id, ${column} order by ${order}) rn from ${table}) d where t.id = d.id and d.rn > 1`;
+
+// Duplicata antiga não se funde sozinha (há pagamento pendurado). O índice fica de fora e o aviso vai ao log.
+const bestEffortUnique = (ddl: string) =>
+  `do $$ begin ${ddl}; exception when unique_violation then raise warning 'indice unico ignorado: dados antigos duplicados'; end $$`;
+
+export const MIGRATION_STATEMENTS = [
+  `do $$ declare r record; begin
+    if to_regclass('installments') is not null then
+      for r in select conname from pg_constraint where conrelid = 'installments'::regclass and contype = 'f' loop
+        execute format('alter table installments drop constraint %I', r.conname);
+      end loop;
+      execute 'update charges c set number = i.number, count = i.count, label = i.label from installments i where c.installment_id = i.id and c.number is null';
+      execute 'update due_changes d set charge_id = c.id from charges c where d.charge_id is null and d.installment_id is not null and c.installment_id = d.installment_id and c.organization_id = d.organization_id';
+    end if;
+  end $$`,
+  `update charges set status = case when paid_cents > 0 then 'parcial' else 'pendente' end where status = 'estornada'`,
+  `update sales s set
+    installment_count = case when s.mode = 'parcelado' then (select count(*) from charges c where c.organization_id = s.organization_id and c.sale_id = s.id and c.number is not null and coalesce(c.label, '') <> 'Entrada') else 1 end,
+    entry_cents = coalesce((select sum(c.amount_cents) from charges c where c.organization_id = s.organization_id and c.sale_id = s.id and c.label = 'Entrada'), 0)
+    where s.installment_count is null`,
+  dedupe("sales", "code", "created_at, id"),
+  dedupe("charges", "code", "id"),
+  dedupe("contracts", "number", "id"),
+  "create unique index if not exists sales_org_code on sales (organization_id, code)",
+  "create unique index if not exists charges_org_code on charges (organization_id, code)",
+  "create unique index if not exists contracts_org_number on contracts (organization_id, number)",
+  bestEffortUnique("create unique index if not exists fiscal_documents_org_series_number on fiscal_documents (organization_id, series, number)"),
+  bestEffortUnique("create unique index if not exists charges_recurrence_due on charges (recurrence_id, due_on) where recurrence_id is not null"),
+];

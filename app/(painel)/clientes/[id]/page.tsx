@@ -16,8 +16,8 @@ export default async function ClientePage({ params, searchParams }: { params: Pr
   if (!client) notFound();
   const finance = clientFinance(book, id);
   const ownSales = book.sales.filter((sale) => sale.clientId === id);
-  const ownInstallments = book.installments.filter((row) => row.clientId === id);
   const ownCharges = book.charges.filter((row) => row.clientId === id);
+  const ownInstallments = ownCharges.filter((row) => row.number !== null);
   const ownContracts = book.contracts.filter((row) => row.clientId === id);
   const ownContacts = book.contacts.filter((row) => row.clientId === id);
   const tabs = [
@@ -77,7 +77,7 @@ export default async function ClientePage({ params, searchParams }: { params: Pr
           <tbody>
             {ownInstallments.map((row) => (
               <tr key={row.id} className="border-t border-[#E2E8F0]">
-                <td className="p-2">{row.label}</td>
+                <td className="p-2">{row.label ?? row.code}</td>
                 <td>{formatDateBR(row.dueOn)}</td>
                 <td>{money(row.amountCents)}</td>
                 <td><Status value={displayStatus(row.status, row.dueOn, book.today, row.paidCents, row.amountCents)} /></td>

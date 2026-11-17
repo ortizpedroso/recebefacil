@@ -19,6 +19,15 @@ export function parseReais(input: string): Cents {
   return cents(Number(reais) * 100 + Number(frac.padEnd(2, "0").slice(0, 2)));
 }
 
+// Percentual com até duas casas vira pontos-base: "2,5" -> 250.
+export function parsePercentBp(input: string): number {
+  return parseReais(input.replace(/%/g, ""));
+}
+
+export function formatPercentBp(bp: number): string {
+  return (bp / 100).toFixed(2).replace(".", ",");
+}
+
 export function formatBRL(value: Cents): string {
   const sign = value < 0 ? "-" : "";
   const abs = Math.abs(value);
@@ -29,9 +38,11 @@ export function formatBRL(value: Cents): string {
   return `${sign}R$ ${reais},${frac}`;
 }
 
+export const MAX_INSTALLMENTS = 240;
+
 export function splitBalance(balance: Cents, count: number): Cents[] {
-  if (!Number.isInteger(count) || count < 1 || count > 60) {
-    throw new Error("A quantidade de parcelas deve ficar entre 1 e 60.");
+  if (!Number.isInteger(count) || count < 1 || count > MAX_INSTALLMENTS) {
+    throw new Error(`A quantidade de parcelas deve ficar entre 1 e ${MAX_INSTALLMENTS}.`);
   }
   if (balance < count) {
     throw new Error("O saldo não cobre um centavo por parcela.");

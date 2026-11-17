@@ -1,4 +1,8 @@
+import Link from "next/link";
 import { contractAction } from "@/app/actions";
+import { ConfirmAction } from "@/components/confirm-action";
+import { NewButton } from "@/components/new-button";
+import { ContractForm } from "@/components/forms";
 import { money, Status, Table, Title } from "@/components/ui";
 import { formatDateBR } from "@/lib/dates";
 import { clientName, loadBook } from "@/lib/read";
@@ -9,7 +13,10 @@ export default async function ContratosPage() {
   const book = await loadBook(session.db, session.org.id, session.org.timezone);
   return (
     <div>
-      <Title hint="O contrato nasce com a venda parcelada ou recorrente.">Contratos</Title>
+      <div className="flex items-center justify-between gap-3">
+        <Title hint="Crie um contrato avulso ou acompanhe os que nasceram de venda.">Contratos</Title>
+        <NewButton title="Novo contrato"><ContractForm clients={book.clients.filter((client) => client.active).map((client) => ({ id: client.id, name: client.name }))} today={book.today} /></NewButton>
+      </div>
       <Table>
         <thead className="bg-slate-50 text-xs text-[#64748B]"><tr><th className="p-3">Número</th><th>Cliente</th><th>Início</th><th>Total</th><th>Status</th><th></th></tr></thead>
         <tbody>
@@ -20,10 +27,13 @@ export default async function ContratosPage() {
               <td>{formatDateBR(contract.startsOn)}</td>
               <td>{money(contract.totalCents)}</td>
               <td><Status value={contract.status} /></td>
-              <td className="space-x-2 p-3 text-sm">
-                <form className="inline" action={async () => { "use server"; await contractAction(contract.id, "ativo"); }}><button className="text-teal-700">Ativar</button></form>
-                <form className="inline" action={async () => { "use server"; await contractAction(contract.id, "suspenso"); }}><button className="text-[#F59E0B]">Suspender</button></form>
-                <form className="inline" action={async () => { "use server"; await contractAction(contract.id, "encerrado"); }}><button className="text-[#EF4444]">Encerrar</button></form>
+              <td className="p-3 text-sm">
+                <div className="flex items-center gap-3">
+                  <Link href={`/contratos/${contract.id}/editar`} className="text-teal-700">Editar</Link>
+                  <ConfirmAction label="Ativar" confirmLabel="Ativar contrato" message="O contrato voltará a ficar ativo." action={contractAction.bind(null, contract.id, "ativo")} className="text-teal-700" />
+                  <ConfirmAction label="Suspender" confirmLabel="Suspender contrato" message="O contrato ficará suspenso." action={contractAction.bind(null, contract.id, "suspenso")} className="text-[#F59E0B]" />
+                  <ConfirmAction label="Encerrar" confirmLabel="Encerrar contrato" message="O contrato será encerrado." action={contractAction.bind(null, contract.id, "encerrado")} className="text-[#EF4444]" danger />
+                </div>
               </td>
             </tr>
           ))}

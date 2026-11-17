@@ -5,16 +5,19 @@ import { drizzle as drizzlePglite } from "drizzle-orm/pglite";
 import { drizzle as drizzlePg, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "./schema";
-import { SCHEMA_SQL } from "./sql";
+import { MIGRATION_STATEMENTS, SCHEMA_SQL } from "./sql";
 
 export type DB = NodePgDatabase<typeof schema>;
 
 const globalDb = globalThis as unknown as { recebefacilDb?: Promise<DB> };
 
-async function migrate(exec: (statement: string) => Promise<void>) {
-  const statements = SCHEMA_SQL.split(";")
-    .map((statement) => statement.trim())
-    .filter(Boolean);
+export async function migrate(exec: (statement: string) => Promise<void>) {
+  const statements = [
+    ...SCHEMA_SQL.split(";")
+      .map((statement) => statement.trim())
+      .filter(Boolean),
+    ...MIGRATION_STATEMENTS,
+  ];
   for (const statement of statements) {
     await exec(statement);
   }

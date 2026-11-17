@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { cancelFiscalAction, issueFiscalAction } from "@/app/actions";
+import { ConfirmAction } from "@/components/confirm-action";
 import { buttonClass, Card, money, Title } from "@/components/ui";
 import { fiscalDocuments, sales } from "@/lib/schema";
 import { requireSession } from "@/lib/session";
@@ -15,11 +16,11 @@ export default async function FiscalPage() {
         <p className="mb-2 font-medium">Emitir a partir da venda</p>
         <div className="space-y-2">
           {saleRows.filter((sale) => sale.status !== "cancelada").map((sale) => (
-            <form key={sale.id} className="flex flex-wrap items-center gap-3 text-sm" action={async () => { "use server"; await issueFiscalAction(sale.id); }}>
+            <div key={sale.id} className="flex flex-wrap items-center gap-3 text-sm">
               <span>{sale.code}</span>
               <span>{money(sale.totalCents)}</span>
-              <button className={buttonClass}>Emitir</button>
-            </form>
+              <ConfirmAction label="Emitir" confirmLabel="Emitir nota" message="A nota fiscal interna será emitida para esta venda." action={issueFiscalAction.bind(null, sale.id)} className={buttonClass} />
+            </div>
           ))}
         </div>
       </Card>
@@ -33,9 +34,7 @@ export default async function FiscalPage() {
             <span>{document.status}</span>
             <span className="text-xs text-[#64748B]">{document.accessKey}</span>
             {document.status === "emitida" ? (
-              <form action={async () => { "use server"; await cancelFiscalAction(document.id); }}>
-                <button className="text-[#EF4444]">Cancelar</button>
-              </form>
+              <ConfirmAction label="Cancelar" confirmLabel="Cancelar nota" message="A nota fiscal será cancelada." action={cancelFiscalAction.bind(null, document.id)} className="text-[#EF4444]" danger />
             ) : null}
           </div>
         ))}

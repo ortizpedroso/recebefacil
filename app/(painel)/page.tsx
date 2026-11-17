@@ -2,7 +2,7 @@ import Link from "next/link";
 import { MoneyChart } from "@/components/charts";
 import { Card, money, Title } from "@/components/ui";
 import { formatDateBR } from "@/lib/dates";
-import { clientName, dashboard, loadBook, periodRange } from "@/lib/read";
+import { clientFinance, clientName, dashboard, loadBook, periodRange } from "@/lib/read";
 import { requireSession } from "@/lib/session";
 
 const filters = [
@@ -20,6 +20,10 @@ export default async function VisaoGeralPage({ searchParams }: { searchParams: P
   const book = await loadBook(session.db, session.org.id, session.org.timezone);
   const range = periodRange(params.periodo ?? "mes", book.today, params.de, params.ate);
   const data = dashboard(book, range.from, range.to);
+  const ranking = book.clients
+    .map((client) => ({ client, finance: clientFinance(book, client.id) }))
+    .sort((a, b) => b.finance.bought - a.finance.bought)
+    .slice(0, 5);
   const cards = [
     ["Vendido", data.sold],
     ["Recebido", data.received],
@@ -76,6 +80,10 @@ export default async function VisaoGeralPage({ searchParams }: { searchParams: P
           <p className="mt-3 text-xs text-[#64748B]">Cobranças por status: {data.statusCount.filter((row) => row.total > 0).map((row) => `${row.status} ${row.total}`).join(", ")}</p>
         </Card>
       </div>
+      <Card className="mt-4">
+        <p className="mb-2 font-medium">Clientes com maior volume</p>
+        {ranking.map((row) => <p key={row.client.id} className="text-sm text-[#64748B]">{row.client.name} · {money(row.finance.bought)}</p>)}
+      </Card>
     </div>
   );
 }

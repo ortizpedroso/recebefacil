@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { CatalogForm } from "@/components/forms";
+import { NewButton } from "@/components/new-button";
+import { ConfirmAction } from "@/components/confirm-action";
 import { Card, money, Status, Table, Title } from "@/components/ui";
 import { adjustStockAction, toggleCatalogAction } from "@/app/actions";
 import { loadBook } from "@/lib/read";
@@ -13,17 +15,18 @@ export default async function ProdutosPage({ searchParams }: { searchParams: Pro
   const price = editing ? `${Math.floor(editing.priceCents / 100)},${String(editing.priceCents % 100).padStart(2, "0")}` : "";
   return (
     <div className="space-y-4">
-      <Title hint="Produto controla unidades. Serviço não baixa estoque.">Produtos e serviços</Title>
-      <Card>
-        {editing ? (
+      <div className="flex items-center justify-between gap-3">
+        <Title hint="Produto controla unidades. Serviço não baixa estoque.">Produtos e serviços</Title>
+        <NewButton title="Novo produto ou serviço"><CatalogForm /></NewButton>
+      </div>
+      {editing ? (
+        <Card>
           <CatalogForm
             itemId={editing.id}
             initial={{ kind: editing.kind === "servico" ? "servico" : "produto", name: editing.name, description: editing.description, category: editing.category, sku: editing.sku, price, billing: editing.billing === "recorrente" ? "recorrente" : "pontual", stock: editing.stockQuantity === null ? "" : String(editing.stockQuantity) }}
           />
-        ) : (
-          <CatalogForm />
-        )}
-      </Card>
+        </Card>
+      ) : null}
       <Table>
         <thead className="bg-slate-50 text-xs text-[#64748B]"><tr><th className="p-3">Nome</th><th>Tipo</th><th>Preço</th><th>Estoque</th><th>Situação</th><th></th></tr></thead>
         <tbody>
@@ -42,9 +45,13 @@ export default async function ProdutosPage({ searchParams }: { searchParams: Pro
                     <button className="text-teal-700">Ajustar</button>
                   </form>
                 ) : null}
-                <form className="inline" action={async () => { "use server"; await toggleCatalogAction(item.id, !item.active); }}>
-                  <button className="text-slate-600">{item.active ? "Inativar" : "Reativar"}</button>
-                </form>
+                <ConfirmAction
+                  label={item.active ? "Inativar" : "Reativar"}
+                  confirmLabel={item.active ? "Inativar item" : "Reativar item"}
+                  message={item.active ? "O item deixará de aparecer nas vendas." : "O item voltará a aparecer nas vendas."}
+                  action={toggleCatalogAction.bind(null, item.id, !item.active)}
+                  className="text-slate-600"
+                />
               </td>
             </tr>
           ))}
