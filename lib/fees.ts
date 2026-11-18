@@ -1,6 +1,7 @@
 import type { Cents } from "./money";
 
-// Tabela pública do Asaas (https://www.asaas.com/precos-e-taxas), conferida em nov/2026.
+// Valores de referência herdados do eventosbr (tabela pública do Asaas de jul/2026). Em nov/2026 o site mostrava
+// Pix e boleto a R$ 2,15 com promoção de R$ 1,08; cartão e antecipação não foram conferidos de novo.
 // Mudou lá, mude aqui: a tela Saque e taxas e o simulador leem só esta tabela.
 export const ASAAS_FEES = {
   pixCents: 199,

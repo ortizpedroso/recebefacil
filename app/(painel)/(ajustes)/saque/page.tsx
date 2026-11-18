@@ -143,7 +143,7 @@ export default async function SaquePage() {
           </tbody>
         </Table>
         <p className="text-[13px] text-slate-500">
-          Tabela pública do Asaas conferida em novembro de 2026. Os valores do Asaas podem mudar, e a fonte oficial é{" "}
+          Valores de referência do Asaas. Eles mudam e podem ser negociados por conta: o que vale para você aparece no Asaas, e a tabela oficial está em{" "}
           <a href="https://www.asaas.com/precos-e-taxas" target="_blank" rel="noopener noreferrer" className="font-semibold text-teal-700 hover:underline">
             asaas.com/precos-e-taxas
           </a>
