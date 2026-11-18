@@ -24,6 +24,7 @@ import { campaignRecipients, campaigns, catalogItems, clients, fiscalDocuments, 
 import { removeMember, updateMember } from "../lib/team";
 import { openSubaccount } from "../lib/subaccount";
 import { requestWithdrawal } from "../lib/withdrawals";
+import { eraseClient } from "../lib/privacy";
 import { loadPlatformSettings } from "../lib/platform-settings";
 import { insertCatalog, insertClient, resetOrganization, updateCatalog, updateClient } from "../lib/tenant";
 import { isBrazilZone } from "../lib/zones";
@@ -469,6 +470,18 @@ export async function updateMemberAction(memberId: string, input: { name: string
     await updateMember(db, org.id, memberId, input);
     revalidatePath("/equipe");
     return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+// Pedido do titular (LGPD, art. 18). O histórico fiscal fica e só os dados pessoais saem quando há venda ou cobrança.
+export async function eraseClientAction(clientId: string) {
+  try {
+    const { db, org } = await allow("clientes.dados");
+    const outcome = await eraseClient(db, org.id, clientId);
+    revalidatePath("/clientes");
+    return { ok: true as const, outcome };
   } catch (error) {
     return fail(error);
   }

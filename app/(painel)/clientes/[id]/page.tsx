@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { MessageCircle } from "lucide-react";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { EditClientButton } from "@/components/client-dialog";
+import { ClientPrivacyActions } from "@/components/client-privacy";
 import { ReceivableList } from "@/components/receivable-row";
 import { Avatar, buttonClass, Card, Empty, money, Pill, smallButtonClass } from "@/components/ui";
 import { formatDateBR, todayIn, whatsAppHref } from "@/lib/dates";
@@ -12,6 +13,7 @@ import { rowContext } from "@/lib/pay-link";
 import { chargeCount, clientSummaries, itemsSummary, listReceivables, saleSummaries } from "@/lib/receivables";
 import { clients, saleItems, sales } from "@/lib/schema";
 import { requireSession } from "@/lib/session";
+import { allowedInDemo, can } from "@/lib/access";
 
 const OPEN_PAGE = 15;
 const DONE_PAGE = 5;
@@ -79,6 +81,7 @@ export default async function ClientePage({ params, searchParams }: { params: Pr
             <EditClientButton
               client={{ id: client.id, name: client.name, whatsapp: client.whatsapp || client.phone, document: client.document, email: client.email, zip: client.zip, state: client.state, city: client.city, district: client.district, street: client.street, number: client.number, complement: client.complement, notes: client.notes }}
             />
+            {can(session.role, "clientes.dados") && (!session.publicDemo || allowedInDemo("clientes.dados")) ? <ClientPrivacyActions clientId={client.id} clientName={client.name} /> : null}
           </div>
         </div>
       </div>

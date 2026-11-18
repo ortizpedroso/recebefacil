@@ -24,6 +24,7 @@ export const permissions = [
   "relatorios.ler",
   "demo.resetar",
   "saque.solicitar",
+  "clientes.dados",
 ] as const;
 
 export type Permission = (typeof permissions)[number];
@@ -36,7 +37,7 @@ const grants: Record<Role, readonly Permission[] | "*"> = {
 };
 
 // Na demonstração pública todo visitante anônimo é administrador da mesma empresa. Estas ações mudam o que o cliente final vê no link de pagamento ou falam com gente de fora.
-const blockedInDemo: readonly Permission[] = ["saque.solicitar", "empresa.gravar", "equipe.convidar", "assinatura.gerir", "fiscal.emitir", "mensagens.enviar", "suporte.abrir"];
+const blockedInDemo: readonly Permission[] = ["clientes.dados", "saque.solicitar", "empresa.gravar", "equipe.convidar", "assinatura.gerir", "fiscal.emitir", "mensagens.enviar", "suporte.abrir"];
 
 export function allowedInDemo(permission: Permission) {
   return !blockedInDemo.includes(permission);
