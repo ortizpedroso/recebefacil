@@ -2,7 +2,7 @@
 
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { can, isRole, type Permission } from "../lib/access";
+import { allowedInDemo, can, isRole, type Permission } from "../lib/access";
 import { AsaasError } from "../lib/asaas";
 import { linkMerchantAccount, setReceivingMode, unlinkMerchantAccount } from "../lib/asaas-merchant";
 import { receiveManually, reverseWithAsaas } from "../lib/asaas-settle";
@@ -33,6 +33,7 @@ function fail(error: unknown) {
 async function allow(permission: Permission) {
   const session = await requireSession();
   if (!can(session.role, permission)) throw new DomainError("Seu papel não pode fazer esta ação.");
+  if (session.publicDemo && !allowedInDemo(permission)) throw new DomainError("Na demonstração esta ação fica desligada. Entre com a sua conta para usar.");
   return session;
 }
 
@@ -95,6 +96,7 @@ export async function saveCatalogAction(formData: FormData) {
   const parsed = catalogSchema.safeParse({
     kind: formData.get("kind"),
     name: formData.get("name"),
+    description: formData.get("description") ?? "",
     price: formData.get("price"),
     category: formData.get("category") ?? "",
     sku: formData.get("sku") ?? "",
@@ -108,7 +110,7 @@ export async function saveCatalogAction(formData: FormData) {
     // A foto é conferida antes de gravar o item, para uma foto ruim não deixar um item pela metade.
     const photo = file instanceof File && file.size > 0 ? parsePhoto(new Uint8Array(await file.arrayBuffer())) : null;
     const { stock, ...item } = parsed.data;
-    const input = { ...item, description: "", priceCents, stockQuantity: parseStock(item.kind, stock) };
+    const input = { ...item, priceCents, stockQuantity: parseStock(item.kind, stock) };
     const existing = String(formData.get("id") || "");
     let itemId = existing;
     if (existing) await updateCatalog(db, org.id, existing, input);

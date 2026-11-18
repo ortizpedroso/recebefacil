@@ -7,7 +7,7 @@ export default function Error({ error, reset }: { error: Error & { digest?: stri
     void fetch("/api/erros", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message: error.message }),
+      body: JSON.stringify({ message: error.message, digest: error.digest }),
     });
   }, [error]);
   return (

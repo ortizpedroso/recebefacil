@@ -33,7 +33,7 @@ export default async function ProdutosPage() {
                 <div className="absolute right-2 top-2">
                   <ProductMenu
                     active={item.active}
-                    product={{ id: item.id, name: item.name, kind, price: `${Math.floor(item.priceCents / 100)},${String(item.priceCents % 100).padStart(2, "0")}`, category: item.category, sku: item.sku, stock: item.stockQuantity === null ? "" : String(item.stockQuantity), photoId }}
+                    product={{ id: item.id, name: item.name, kind, description: item.description, price: `${Math.floor(item.priceCents / 100)},${String(item.priceCents % 100).padStart(2, "0")}`, category: item.category, sku: item.sku, stock: item.stockQuantity === null ? "" : String(item.stockQuantity), photoId }}
                   />
                 </div>
                 <div className="flex flex-col gap-0.5 px-3 py-2.5">

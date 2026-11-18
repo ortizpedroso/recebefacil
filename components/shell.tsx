@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import { AlertTriangle, Bell, ChevronDown, Home, MoreHorizontal, Package, Plus, RotateCcw, Search, ShoppingCart, UserCheck, Users, Wallet, X } from "lucide-react";
+import { AlertTriangle, BarChart3, Bell, ChevronDown, Home, Package, Plus, RotateCcw, Search, Settings, ShoppingCart, UserCheck, Users, Wallet, X } from "lucide-react";
 import { resetDemoAction } from "@/app/actions";
 import { normalize } from "@/lib/text";
 import { Modal } from "./dialog";
@@ -15,13 +15,14 @@ const mainNav = [
   { href: "/receber", label: "A receber", icon: Wallet },
   { href: "/vendas", label: "Vendas", icon: ShoppingCart },
   { href: "/clientes", label: "Clientes", icon: Users },
-  { href: "/produtos", label: "Produtos", icon: Package },
+  { href: "/produtos", label: "Produtos e serviços", icon: Package },
+  { href: "/relatorios", label: "Relatórios", icon: BarChart3 },
 ];
 
-const moreNav = { href: "/mais", label: "Mais", icon: MoreHorizontal };
+const moreNav = { href: "/mais", label: "Configurações", icon: Settings };
 
-// Páginas que moram dentro de "Mais" acendem esse item do menu.
-const MORE_PAGES = ["/mais", "/relatorios", "/recebimentos", "/plataforma", "/configuracoes", "/equipe", "/assinatura", "/ajuda", "/termos", "/privacidade"];
+// Páginas que moram dentro de "Configurações" acendem esse item do menu.
+const MORE_PAGES = ["/mais", "/recebimentos", "/plataforma", "/configuracoes", "/equipe", "/assinatura", "/ajuda", "/termos", "/privacidade"];
 
 const ROUTE_LABELS: [string, string][] = [
   ["/vendas/nova", "Nova venda"],
@@ -32,12 +33,12 @@ const ROUTE_LABELS: [string, string][] = [
   ["/receber", "A receber"],
   ["/vendas", "Vendas"],
   ["/clientes", "Clientes"],
-  ["/produtos", "Produtos"],
+  ["/produtos", "Produtos e serviços"],
   ["/relatorios", "Relatórios"],
   ["/recebimentos", "Recebimentos"],
   ["/equipe", "Equipe"],
   ["/ajuda", "Ajuda"],
-  ["/mais", "Mais"],
+  ["/mais", "Configurações"],
   ["/termos", "Termos de uso"],
   ["/privacidade", "Privacidade"],
   ["/busca", "Busca"],
@@ -308,7 +309,7 @@ export function Shell({
           Vender
         </Link>
         <BottomLink href="/vendas" label="Vendas" icon={ShoppingCart} on={active("/vendas") && pathname !== "/vendas/nova"} />
-        <BottomLink href="/mais" label="Mais" icon={MoreHorizontal} on={active("/mais")} />
+        <BottomLink href="/mais" label="Configurações" icon={Settings} on={active("/mais")} />
       </nav>
 
       <Modal open={confirmReset} onOpenChange={setConfirmReset} title="Restaurar dados de exemplo" description="Clientes, vendas e cobranças voltam ao conjunto original da demonstração.">

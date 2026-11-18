@@ -11,6 +11,23 @@ const nextConfig: NextConfig = {
   },
   // Cobranças, parcelas, inadimplência, contratos e recorrências viraram a lista A receber.
   // A página de impressão do contrato continua em /contratos/[id]/imprimir.
+  async headers() {
+    const everywhere = [
+      { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" },
+      { key: "X-Content-Type-Options", value: "nosniff" },
+      { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+      { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()" },
+    ];
+    // Só a página do cliente final se recusa a abrir dentro de outro site. O painel pode precisar da prévia do host.
+    const payPage = [
+      { key: "X-Frame-Options", value: "DENY" },
+      { key: "Content-Security-Policy", value: "frame-ancestors 'none'; base-uri 'self'; object-src 'none'" },
+    ];
+    return [
+      { source: "/:path*", headers: everywhere },
+      { source: "/pagar/:path*", headers: payPage },
+    ];
+  },
   async redirects() {
     return [
       { source: "/cobrancas", destination: "/receber", permanent: false },

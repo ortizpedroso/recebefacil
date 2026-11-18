@@ -24,6 +24,7 @@ export default async function PagarPage({ params }: { params: Promise<{ token: s
         <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-teal-700 text-lg font-bold text-white">{company.name.charAt(0).toUpperCase()}</span>
         <h1 className="text-xl font-bold text-slate-900">{company.name}</h1>
         <p className="text-sm text-slate-500">{page.clientFirstName ? `Olá, ${page.clientFirstName}. ` : ""}Este é o seu pagamento.</p>
+        {page.demo ? <p className="text-sm font-semibold text-red-700">Demonstração. Não faça nenhum pagamento.</p> : null}
       </header>
 
       <section className="space-y-3 rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-sm">

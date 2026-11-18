@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import type { Metadata } from "next";
 import { Shell, type ShellAlert, type ShellSearch } from "@/components/shell";
 import { money } from "@/components/ui";
 import { loadAccess } from "@/lib/billing";
@@ -8,6 +9,9 @@ import { alertRows } from "@/lib/receivables";
 import { clients, sales } from "@/lib/schema";
 import { requireSession } from "@/lib/session";
 import { normalize } from "@/lib/text";
+
+// O painel é dado de empresa. Só a página de planos pede para ser indexada.
+export const metadata: Metadata = { robots: { index: false, follow: false } };
 
 export default async function PainelLayout({ children }: { children: React.ReactNode }) {
   const session = await requireSession();

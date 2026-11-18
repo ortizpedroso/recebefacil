@@ -6,8 +6,7 @@ import { requireSession } from "@/lib/session";
 
 const LINKS = [
   { href: "/clientes", title: "Clientes", hint: "Quem compra de você", phoneOnly: true },
-  { href: "/produtos", title: "Produtos", hint: "O que você vende, com foto e preço", phoneOnly: true },
-  { href: "/relatorios", title: "Relatórios", hint: "Vendas e recebimentos, gráfico, exportar para Excel e PDF" },
+  { href: "/produtos", title: "Produtos e serviços", hint: "O que você vende, com foto e preço", phoneOnly: true },
   { href: "/recebimentos", title: "Recebimentos", hint: "Como você recebe: Gestão ou Integrado com Asaas, chave Pix e instruções" },
   { href: "/configuracoes", title: "Minha empresa", hint: "Nome, CNPJ, fuso horário, multa e juros por atraso" },
   { href: "/equipe", title: "Equipe", hint: "Convidar pessoas e definir o que cada uma pode fazer" },
@@ -23,8 +22,8 @@ export default async function MaisPage() {
   const links: ((typeof LINKS)[number] | typeof PLATFORM_LINK)[] = owner ? [...LINKS, PLATFORM_LINK] : LINKS;
   return (
     <div>
-      <Title hint="O que você usa de vez em quando.">Mais</Title>
-      <nav className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-sm" aria-label="Mais opções">
+      <Title hint="Ajustes, plano e suporte da sua conta.">Configurações</Title>
+      <nav className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-sm" aria-label="Configurações">
         {links.map((link) => (
           <Link key={link.href} href={link.href} className={`items-center justify-between gap-3 px-4 py-3.5 hover:bg-slate-50 ${"phoneOnly" in link ? "flex md:hidden" : "flex"}`}>
             <span className="min-w-0">

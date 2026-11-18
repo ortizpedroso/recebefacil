@@ -16,6 +16,7 @@ export type ProductData = {
   id: string;
   name: string;
   kind: CatalogKind;
+  description: string;
   price: string;
   category: string;
   sku: string;
@@ -99,6 +100,9 @@ function ProductForm({ product, onDone }: { product?: ProductData; onDone: () =>
             </option>
           ))}
         </select>
+      </Field>
+      <Field label="Descrição" hint="opcional">
+        <textarea name="description" className={inputClass} rows={2} defaultValue={product?.description} placeholder="Ex.: Corte feminino com lavagem e secagem." />
       </Field>
       <details className="rounded-lg border border-slate-200">
         <summary className="cursor-pointer px-3 py-2.5 text-sm font-semibold text-slate-700">Mais opções (categoria, código, estoque)</summary>

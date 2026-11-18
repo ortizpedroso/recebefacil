@@ -33,6 +33,10 @@ npm start
 
 `PLATFORM_OWNER_EMAILS` lista, separados por vírgula, os e-mails que podem abrir a página Plataforma (sem diferenciar maiúsculas). Só vale para identidade verificada. No desenvolvimento local, o visitante simulado também é dono. Em produção nunca é, e a demonstração pública nunca é.
 
+`NEXT_PUBLIC_SITE_URL` é o endereço público do app, por exemplo `https://recebefacil.com.br`. Com ela, as prévias de link (Open Graph) usam endereço absoluto e o `robots.txt` aponta para o `sitemap.xml`. Sem ela, o sitemap sai vazio.
+
+Na demonstração pública (visitante sem login), dados da empresa, equipe, assinatura, nota fiscal, mensagens e suporte ficam desligados, e o link de pagamento avisa que é demonstração.
+
 Chave de API e token do Asaas não vão em variável de ambiente, nem no código, nem em arquivo. Elas são digitadas na página Plataforma e ficam cifradas no banco.
 
 ## Asaas

@@ -56,6 +56,7 @@ export const newClientSchema = z.object({ name: clientSchema.shape.name, whatsap
 export const catalogSchema = z.object({
   kind: z.enum(CATALOG_KINDS),
   name: z.string().trim().min(2, "Informe o nome.").max(160),
+  description: z.string().trim().max(2000).default(""),
   price: moneyField,
   category: z.string().trim().max(80).default(""),
   sku: z.string().trim().max(40).default(""),

@@ -6,7 +6,7 @@ const FAQS: [string, string][] = [
   ["Como faço uma venda?", "Toque em Nova venda. Escolha o cliente, toque nos produtos e diga como vai receber: à vista, parcelado ou mensalidade. Ao concluir, o link de pagamento já fica pronto para enviar."],
   ["Como marco que o cliente me pagou?", "Em A receber, toque em Recebi na linha do pagamento. O valor e a data já vêm preenchidos. Se o cliente pagou com atraso, a multa e os juros aparecem sugeridos e você pode ajustar."],
   ["Como cobro um cliente?", "Toque em Cobrar na linha do pagamento. O WhatsApp abre com a mensagem pronta e o link de pagamento. Você só envia. Se o cliente não tem WhatsApp, copie o link e mande por onde preferir."],
-  ["Onde o cliente paga?", "O link de pagamento mostra o que ele comprou, o valor e a sua chave Pix. Cadastre a chave e as instruções em Mais, Recebimentos. Depois de pagar, o cliente envia o comprovante para você, e você marca Recebi."],
+  ["Onde o cliente paga?", "O link de pagamento mostra o que ele comprou, o valor e a sua chave Pix. Cadastre a chave e as instruções em Configurações, Recebimentos. Depois de pagar, o cliente envia o comprovante para você, e você marca Recebi."],
   ["Errei ao marcar um pagamento. E agora?", "Abra a venda ou o cliente, toque nos três pontos da linha e escolha Desfazer recebimento. O pagamento volta a ficar em aberto."],
   ["Como vendo um terreno em até 240 parcelas?", "Na Nova venda, escolha Parcelado e o número de parcelas. Em Financiamento longo, informe os juros ao mês e o reajuste anual. Você vê as parcelas antes de concluir, e depois pode gerar o contrato na página da venda."],
   ["Como funciona a mensalidade?", "Escolha Mensalidade na venda. Uma cobrança nova nasce a cada mês até você encerrar, em Mais, na página da venda."],

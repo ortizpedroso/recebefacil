@@ -34,6 +34,13 @@ const grants: Record<Role, readonly Permission[] | "*"> = {
   operador: ["pagamentos.registrar", "mensagens.enviar", "suporte.abrir", "relatorios.ler", "cobrancas.contatar"],
 };
 
+// Na demonstração pública todo visitante anônimo é administrador da mesma empresa. Estas ações mudam o que o cliente final vê no link de pagamento ou falam com gente de fora.
+const blockedInDemo: readonly Permission[] = ["empresa.gravar", "equipe.convidar", "assinatura.gerir", "fiscal.emitir", "mensagens.enviar", "suporte.abrir"];
+
+export function allowedInDemo(permission: Permission) {
+  return !blockedInDemo.includes(permission);
+}
+
 export function isRole(value: string): value is Role {
   return (roles as readonly string[]).includes(value);
 }

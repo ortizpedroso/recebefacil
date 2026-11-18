@@ -5,6 +5,7 @@ import type { DB } from "./db";
 import { documentKind } from "./documents";
 import { chargeBadge, chargeTitle, type Badge } from "./labels";
 import { lateCharges } from "./late";
+import { PUBLIC_DEMO_KEY } from "./onboarding";
 import { isIntegrated, loadPlatformSettings } from "./platform-settings";
 import { catalogImages, charges, clients, contracts, organizations, recurrences, saleItems } from "./schema";
 import { signToken, verifyToken } from "./secret";
@@ -12,6 +13,8 @@ import { signToken, verifyToken } from "./secret";
 export type PayPage = {
   company: { name: string; phone: string; email: string; pixKey: string; instructions: string };
   clientFirstName: string;
+  // Qualquer visitante escreve na demonstração pública, então o link dela avisa que nada ali é cobrança de verdade.
+  demo: boolean;
   title: string;
   dueOn: string;
   state: "open" | "paid" | "cancelled";
@@ -67,6 +70,7 @@ export async function loadPayPage(db: DB, token: string): Promise<PayPage | null
   return {
     company: { name: org.tradeName, phone: org.phone, email: org.email, pixKey: org.pixKey, instructions: org.paymentInstructions },
     clientFirstName: client.name.trim().split(/\s+/)[0] ?? "",
+    demo: org.viewerKey === PUBLIC_DEMO_KEY,
     title: chargeTitle(charge),
     dueOn: charge.dueOn,
     state,
