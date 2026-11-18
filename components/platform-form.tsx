@@ -37,17 +37,17 @@ export function PlatformForm({ view, webhookUrl, events }: { view: PlatformSetti
     router.refresh();
   }
 
+  function show(result: Awaited<ReturnType<typeof testPlatformConnectionAction>>) {
+    setConnection(result.ok ? { ok: true, text: `Conectado a ${result.accountName || "uma conta Asaas"} · ambiente ${ENVIRONMENT_LABEL[result.environment]} · carteira ••••${result.walletTail}` } : { ok: false, text: result.error });
+  }
+
   async function test() {
     setTesting(true);
     setConnection(null);
     const result = await testPlatformConnectionAction();
     setTesting(false);
-    if (!result.ok) {
-      setConnection({ ok: false, text: result.error });
-      return;
-    }
-    setConnection({ ok: true, text: `Conectado a ${result.accountName || "uma conta Asaas"} · ambiente ${ENVIRONMENT_LABEL[result.environment]} · carteira ••••${result.walletTail}` });
-    router.refresh();
+    show(result);
+    if (result.ok) router.refresh();
   }
 
   return (
@@ -69,7 +69,8 @@ export function PlatformForm({ view, webhookUrl, events }: { view: PlatformSetti
             }
             // Os campos de segredo voltam em branco: o que foi salvo nunca volta para a tela.
             form.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach((input) => (input.value = ""));
-            toast("Configuração da plataforma salva.");
+            if (result.connection) show(result.connection);
+            toast(result.connection && !result.connection.ok ? "Configuração salva, mas o Asaas recusou a conexão." : "Configuração da plataforma salva.");
             router.refresh();
           }}
         >
@@ -135,7 +136,7 @@ export function PlatformForm({ view, webhookUrl, events }: { view: PlatformSetti
 
       <Card className="space-y-3">
         <h2 className="font-bold text-slate-900">Testar a conexão</h2>
-        <p className="text-sm text-slate-600">Usa a chave que já está salva, consulta a conta no Asaas e guarda a carteira da plataforma. Salve a chave antes de testar.</p>
+        <p className="text-sm text-slate-600">Ao salvar, a carteira da plataforma é buscada no Asaas com a chave salva. Use este botão para conferir de novo.</p>
         <div className="flex flex-wrap items-center gap-3">
           <button type="button" className={buttonClass} disabled={testing || !view.apiKey.configured} onClick={test}>
             {testing ? "Testando..." : "Testar conexão"}
@@ -147,7 +148,7 @@ export function PlatformForm({ view, webhookUrl, events }: { view: PlatformSetti
           ) : null}
         </div>
         {connection ? <p className={`rounded-lg px-3 py-2 text-sm ${connection.ok ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-700"}`}>{connection.text}</p> : null}
-        <p className="text-sm text-slate-500">{view.ready ? "Tudo pronto: os lojistas já podem ligar o modo Integrado." : "Falta chave, token do webhook ou testar a conexão para os lojistas poderem usar o modo Integrado."}</p>
+        <p className="text-sm text-slate-500">{view.ready ? "Tudo pronto: os lojistas já podem ligar o modo Integrado." : "Falta chave válida ou token do webhook para os lojistas poderem usar o modo Integrado."}</p>
       </Card>
 
       <Card className="space-y-3">
