@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import { AlertTriangle, BarChart3, Bell, ChevronDown, Home, Package, Plus, RotateCcw, Search, Settings, ShoppingCart, UserCheck, Users, Wallet, X } from "lucide-react";
+import { AlertTriangle, BadgeCheck, BarChart3, Bell, ChevronDown, Home, Package, Plus, RotateCcw, Search, Settings, ShoppingCart, UserCheck, Users, Wallet, X } from "lucide-react";
 import { resetDemoAction } from "@/app/actions";
 import { normalize } from "@/lib/text";
 import { Modal } from "./dialog";
@@ -17,12 +17,14 @@ const mainNav = [
   { href: "/clientes", label: "Clientes", icon: Users },
   { href: "/produtos", label: "Produtos e serviços", icon: Package },
   { href: "/relatorios", label: "Relatórios", icon: BarChart3 },
+  { href: "/assinatura", label: "Plano", icon: BadgeCheck },
 ];
 
-const moreNav = { href: "/mais", label: "Configurações", icon: Settings };
+// No computador, Configurações abre direto nas abas. No celular, a barra de baixo leva a /mais, que também guarda Clientes, Produtos e Plano.
+const moreNav = { href: "/configuracoes", label: "Configurações", icon: Settings };
 
 // Páginas que moram dentro de "Configurações" acendem esse item do menu.
-const MORE_PAGES = ["/mais", "/recebimentos", "/plataforma", "/configuracoes", "/equipe", "/assinatura", "/ajuda", "/termos", "/privacidade"];
+const MORE_PAGES = ["/mais", "/recebimentos", "/plataforma", "/configuracoes", "/equipe", "/ajuda", "/termos", "/privacidade"];
 
 const ROUTE_LABELS: [string, string][] = [
   ["/vendas/nova", "Nova venda"],
@@ -95,7 +97,7 @@ export function Shell({
 
   function active(href: string) {
     if (href === "/") return pathname === "/";
-    if (href === "/mais") return MORE_PAGES.some((page) => pathname === page || pathname.startsWith(`${page}/`));
+    if (href === "/mais" || href === moreNav.href) return MORE_PAGES.some((page) => pathname === page || pathname.startsWith(`${page}/`));
     return pathname === href || pathname.startsWith(`${href}/`);
   }
 
