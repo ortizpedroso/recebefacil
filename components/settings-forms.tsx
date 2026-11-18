@@ -167,6 +167,12 @@ export function ReceivingForm({ pixKey, instructions, initialMode, link, offer, 
         </label>
       </fieldset>
 
+      {!offer.available ? (
+        <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          O modo Integrado e a abertura da conta de recebimento no Asaas aparecem aqui assim que o dono da plataforma cadastrar as credenciais do Asaas em Configurações, na aba Plataforma.
+        </p>
+      ) : null}
+
       {offer.available && !offer.planAllowed ? (
         <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <p>
