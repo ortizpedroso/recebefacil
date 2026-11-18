@@ -20,6 +20,11 @@ export function maskDocument(value: string, kind: "pf" | "pj") {
   return kind === "pj" ? maskCnpj(value) : maskCpf(value);
 }
 
+// Quem digita não escolhe entre CPF e CNPJ: a máscara muda quando passa de 11 dígitos.
+export function maskCpfOrCnpj(value: string) {
+  return onlyDigits(value).length > 11 ? maskCnpj(value) : maskCpf(value);
+}
+
 export function maskPhone(value: string) {
   const digits = onlyDigits(value).slice(0, 11);
   const withArea = digits.replace(/(\d{2})(\d)/, "($1) $2");

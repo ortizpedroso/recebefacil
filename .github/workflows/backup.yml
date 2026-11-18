@@ -3,6 +3,9 @@ name: Backup
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   backup:
     runs-on: ubuntu-latest
@@ -11,11 +14,20 @@ jobs:
       - name: Dump Postgres
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
         run: |
+          if [ -z "$BACKUP_PASSPHRASE" ]; then
+            echo "Defina o segredo BACKUP_PASSPHRASE: o repositório é público e o dump sai cifrado." >&2
+            exit 1
+          fi
           sudo apt-get update
           sudo apt-get install -y postgresql-client
           sh scripts/backup-postgres.sh backup.dump
+          gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --symmetric --cipher-algo AES256 --output backup.dump.gpg backup.dump <<< "$BACKUP_PASSPHRASE"
+          rm backup.dump
+        shell: bash
       - uses: actions/upload-artifact@v4
         with:
           name: postgres-backup
-          path: backup.dump
+          path: backup.dump.gpg
+          retention-days: 7

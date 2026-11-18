@@ -17,8 +17,8 @@ export function MoneyChart({ rows }: { rows: { month: string; vendido: number; r
           <XAxis dataKey="month" tick={{ fill: "#64748B", fontSize: 12 }} />
           <YAxis tick={{ fill: "#64748B", fontSize: 12 }} />
           <Tooltip formatter={(value) => formatBRL(cents(Math.round(Number(value) * 100)))} />
-          <Bar dataKey="vendido" fill="#2563EB" radius={4} />
-          <Bar dataKey="recebido" fill="#10B981" radius={4} />
+          <Bar dataKey="vendido" fill="#94A3B8" radius={4} />
+          <Bar dataKey="recebido" fill="#0F766E" radius={4} />
         </BarChart>
       </ResponsiveContainer>
     </div>

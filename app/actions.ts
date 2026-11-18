@@ -2,40 +2,73 @@
 
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-import { authenticate, openAuthSession, registerCompany } from "../lib/accounts";
-import { can, isRole, type Permission } from "../lib/access";
-import { issueAsaasCharge, saveAsaasCredentials, webhookTokenFor } from "../lib/asaas-book";
-import { isPlan, payPlatformInvoice, subscribe } from "../lib/billing";
+import { allowedInDemo, can, isRole, type Permission } from "../lib/access";
+import { AsaasError } from "../lib/asaas";
+import { linkMerchantAccount, setReceivingMode, unlinkMerchantAccount } from "../lib/asaas-merchant";
+import { receiveManually, reverseWithAsaas } from "../lib/asaas-settle";
+import { assertCanSell, isPlan } from "../lib/billing";
 import { todayIn } from "../lib/dates";
-import { isValidCnpj } from "../lib/documents";
-import { DomainError, cancelSale, changeDueDate, createSale, registerPayment, reverseCharge, setContractStatus, setRecurrenceStatus } from "../lib/ledger";
-import { cents, parseReais } from "../lib/money";
+import { documentKind, isValidCnpj } from "../lib/documents";
+import { DomainError } from "../lib/errors";
+import { cancelSale, changeDueDate, createCharge, createContractForSale, createSale, deleteSale, endSubscription, updateSale, type SaleInput } from "../lib/ledger";
+import { lateSettingsError } from "../lib/late";
+import { cents, parsePercentBp, parseReais } from "../lib/money";
+import { parsePhoto, saveCatalogPhoto } from "../lib/photos";
+import { isPlatformOwner } from "../lib/platform-owner";
+import { generateWebhookToken, parsePlatformForm, savePlatformSettings, testPlatformConnection } from "../lib/platform-settings";
 import { requireSession } from "../lib/session";
-import { catalogSchema, clientSchema, contactSchema, dueSchema, paymentSchema, saleSchema } from "../lib/schemas";
+import { cancelPlan, choosePlan } from "../lib/subscription";
+import { catalogSchema, chargeSchema, clientSchema, dueSchema, paymentSchema, saleSchema, toClientInput } from "../lib/schemas";
+import type { z } from "zod";
+import { campaignRecipients, campaigns, catalogItems, clients, fiscalDocuments, members, organizations, sales, supportTickets } from "../lib/schema";
+import { removeMember, updateMember } from "../lib/team";
+import { openSubaccount } from "../lib/subaccount";
+import { requestWithdrawal } from "../lib/withdrawals";
 import { eraseClient } from "../lib/privacy";
-import { authSessions, campaignRecipients, campaigns, catalogItems, clients, contacts, fiscalDocuments, integrationEvents, members, organizations, sales, stockMoves, supportTickets } from "../lib/schema";
-import { tokenHash } from "../lib/secrets";
+import { loadPlatformSettings } from "../lib/platform-settings";
 import { insertCatalog, insertClient, resetOrganization, updateCatalog, updateClient } from "../lib/tenant";
+import { isBrazilZone } from "../lib/zones";
 
 function fail(error: unknown) {
-  if (error instanceof DomainError) return { ok: false as const, error: error.message };
+  if (error instanceof DomainError || error instanceof AsaasError) return { ok: false as const, error: error.message };
+  console.error(error);
   return { ok: false as const, error: "Não foi possível concluir. Revise os dados." };
 }
 
 async function allow(permission: Permission) {
   const session = await requireSession();
-  if (session.publicDemo) throw new DomainError("O visitante só consulta o livro compartilhado.");
   if (!can(session.role, permission)) throw new DomainError("Seu papel não pode fazer esta ação.");
+  if (session.publicDemo && !allowedInDemo(permission)) throw new DomainError("Na demonstração esta ação fica desligada. Entre com a sua conta para usar.");
   return session;
 }
 
-function parseStock(kind: "produto" | "servico", stock: string) {
-  if (kind === "servico" || stock.trim() === "") return null;
+// Só o dono da plataforma mexe nas credenciais. Quem não é dono recebe a mesma recusa de quem não tem papel.
+async function owner() {
+  const session = await requireSession();
+  if (!isPlatformOwner(session)) throw new DomainError("Só o dono da plataforma pode fazer esta ação.");
+  return session;
+}
+
+// Dinheiro mudou de lugar: o menu, o Início e as listas leem isso.
+function refreshMoney() {
+  revalidatePath("/", "layout");
+}
+
+function parseStock(kind: string, stock: string) {
+  if (kind !== "produto" || stock.trim() === "") return null;
   const quantity = Number(stock);
   if (!Number.isInteger(quantity) || quantity < 0) throw new DomainError("Informe o estoque em unidades inteiras.");
   return quantity;
+}
+
+function priceOf(text: string) {
+  try {
+    const value = parseReais(text);
+    if (value > 0) return value;
+  } catch {
+    // cai na mensagem abaixo
+  }
+  throw new DomainError("Informe o preço, por exemplo 49,90.");
 }
 
 export async function createClientAction(raw: unknown) {
@@ -43,86 +76,114 @@ export async function createClientAction(raw: unknown) {
   if (!parsed.success) return { ok: false as const, error: parsed.error.issues[0]?.message || "Revise os dados do cliente." };
   try {
     const { db, org } = await allow("clientes.gravar");
-    await insertClient(db, org.id, { ...parsed.data, whatsapp: parsed.data.whatsapp || parsed.data.phone });
-    revalidatePath("/clientes");
-    return { ok: true as const };
+    const clientId = await insertClient(db, org.id, toClientInput(parsed.data));
+    revalidatePath("/", "layout");
+    return { ok: true as const, clientId };
   } catch (error) {
     return fail(error);
   }
 }
 
-export async function updateClientAction(raw: unknown) {
+export async function updateClientAction(clientId: string, raw: unknown) {
   const parsed = clientSchema.safeParse(raw);
-  const id = typeof raw === "object" && raw && "id" in raw ? String(raw.id) : "";
-  if (!parsed.success || !id) return { ok: false as const, error: parsed.success ? "Revise os dados do cliente." : parsed.error.issues[0]?.message || "Revise os dados do cliente." };
+  if (!parsed.success) return { ok: false as const, error: parsed.error.issues[0]?.message || "Revise os dados do cliente." };
   try {
     const { db, org } = await allow("clientes.gravar");
-    await updateClient(db, org.id, id, { ...parsed.data, whatsapp: parsed.data.whatsapp || parsed.data.phone });
-    revalidatePath("/clientes");
-    revalidatePath(`/clientes/${id}`);
+    await updateClient(db, org.id, clientId, toClientInput(parsed.data));
+    revalidatePath("/", "layout");
     return { ok: true as const };
   } catch (error) {
     return fail(error);
   }
 }
 
-export async function createCatalogAction(raw: unknown) {
-  const parsed = catalogSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false as const, error: "Revise o item do catálogo." };
+export async function saveCatalogAction(formData: FormData) {
+  const parsed = catalogSchema.safeParse({
+    kind: formData.get("kind"),
+    name: formData.get("name"),
+    description: formData.get("description") ?? "",
+    price: formData.get("price"),
+    category: formData.get("category") ?? "",
+    sku: formData.get("sku") ?? "",
+    stock: formData.get("stock") ?? "",
+  });
+  if (!parsed.success) return { ok: false as const, error: parsed.error.issues[0]?.message || "Revise o item." };
   try {
-    const priceCents = parseReais(parsed.data.price);
     const { db, org } = await allow("catalogo.gravar");
+    const priceCents = priceOf(parsed.data.price);
+    const file = formData.get("photo");
+    // A foto é conferida antes de gravar o item, para uma foto ruim não deixar um item pela metade.
+    const photo = file instanceof File && file.size > 0 ? parsePhoto(new Uint8Array(await file.arrayBuffer())) : null;
     const { stock, ...item } = parsed.data;
-    await insertCatalog(db, org.id, { ...item, priceCents, sku: item.sku || "", stockQuantity: parseStock(item.kind, stock) });
+    const input = { ...item, priceCents, stockQuantity: parseStock(item.kind, stock) };
+    const existing = String(formData.get("id") || "");
+    let itemId = existing;
+    if (existing) await updateCatalog(db, org.id, existing, input);
+    else itemId = await insertCatalog(db, org.id, input);
+    if (photo) await saveCatalogPhoto(db, org.id, itemId, photo);
     revalidatePath("/produtos");
-    return { ok: true as const };
-  } catch (error) {
-    return fail(error);
-  }
-}
-
-export async function updateCatalogAction(id: string, raw: unknown) {
-  const parsed = catalogSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false as const, error: "Revise o item do catálogo." };
-  try {
-    const priceCents = parseReais(parsed.data.price);
-    const { db, org } = await allow("catalogo.gravar");
-    const { stock, ...item } = parsed.data;
-    await updateCatalog(db, org.id, id, { ...item, priceCents, sku: item.sku || "", stockQuantity: parseStock(item.kind, stock) });
-    revalidatePath("/produtos");
-    return { ok: true as const };
+    return { ok: true as const, itemId };
   } catch (error) {
     return fail(error);
   }
 }
 
 export async function toggleCatalogAction(id: string, active: boolean) {
-  const { db, org } = await allow("catalogo.gravar");
-  await db.update(catalogItems).set({ active }).where(and(eq(catalogItems.organizationId, org.id), eq(catalogItems.id, id)));
-  revalidatePath("/produtos");
+  try {
+    const { db, org } = await allow("catalogo.gravar");
+    await db.update(catalogItems).set({ active }).where(and(eq(catalogItems.organizationId, org.id), eq(catalogItems.id, id)));
+    revalidatePath("/produtos");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+function toSaleInput(data: z.infer<typeof saleSchema>): SaleInput {
+  return {
+    clientId: data.clientId ?? "",
+    soldOn: data.soldOn,
+    discountCents: cents(data.discountCents),
+    notes: data.notes,
+    mode: data.mode,
+    entryCents: cents(data.entryCents),
+    installmentCount: data.installmentCount,
+    firstDue: data.firstDue,
+    periodicity: data.periodicity,
+    interestMonthlyBp: data.interestMonthlyBp,
+    adjustYearlyBp: data.adjustYearlyBp,
+    method: data.method,
+    makeContract: false,
+    items: data.items.map((item) => ({ ...item, unitCents: cents(item.unitCents) })),
+    paidNow: data.paidNow,
+  };
 }
 
 export async function createSaleAction(raw: unknown) {
   const parsed = saleSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false as const, error: "Revise a venda." };
+  if (!parsed.success) return { ok: false as const, error: parsed.error.issues[0]?.message || "Revise a venda." };
   try {
-    const { db, org } = await allow("vendas.criar");
-    const saleId = await createSale(db, org.id, {
-      clientId: parsed.data.clientId,
-      soldOn: parsed.data.soldOn,
-      discountCents: parseReais(parsed.data.discount || "0"),
-      notes: parsed.data.notes,
-      mode: parsed.data.mode,
-      entryCents: parseReais(parsed.data.entry || "0"),
-      installmentCount: parsed.data.installmentCount,
-      firstDue: parsed.data.firstDue,
-      periodicity: parsed.data.periodicity,
-      method: parsed.data.method,
-      makeContract: parsed.data.makeContract,
-      items: parsed.data.items.map((item) => ({ ...item, unitCents: cents(item.unitCents) })),
-    });
-    revalidatePath("/vendas");
-    revalidatePath("/");
+    const session = await allow("vendas.criar");
+    await assertCanSell(session.db, session.org);
+    const { newClient, paidNow } = parsed.data;
+    if (newClient && !can(session.role, "clientes.gravar")) throw new DomainError("Seu papel não pode cadastrar clientes.");
+    if (paidNow && !can(session.role, "pagamentos.registrar")) throw new DomainError("Seu papel não pode registrar recebimentos.");
+    const client = newClient ? toClientInput({ ...newClient, email: "", zip: "", state: "", city: "", district: "", street: "", number: "", complement: "", notes: "" }) : undefined;
+    const saleId = await createSale(session.db, session.org.id, toSaleInput(parsed.data), client);
+    refreshMoney();
+    return { ok: true as const, saleId, received: Boolean(paidNow) };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function updateSaleAction(saleId: string, raw: unknown) {
+  const parsed = saleSchema.safeParse(raw);
+  if (!parsed.success) return { ok: false as const, error: parsed.error.issues[0]?.message || "Revise a venda." };
+  try {
+    const { db, org } = await allow("vendas.editar");
+    await updateSale(db, org.id, saleId, toSaleInput(parsed.data));
+    refreshMoney();
     return { ok: true as const, saleId };
   } catch (error) {
     return fail(error);
@@ -131,21 +192,20 @@ export async function createSaleAction(raw: unknown) {
 
 export async function payAction(raw: unknown) {
   const parsed = paymentSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false as const, error: "Revise o pagamento." };
+  if (!parsed.success) return { ok: false as const, error: "Revise o valor e a data do recebimento." };
   try {
     const { db, org } = await allow("pagamentos.registrar");
-    const amountCents = parseReais(parsed.data.amount);
-    await registerPayment(db, org.id, {
+    const { paymentId, warning } = await receiveManually(db, org.id, {
       chargeId: parsed.data.chargeId,
-      amountCents,
+      amountCents: parseReais(parsed.data.amount),
+      feeCents: parseReais(parsed.data.fee || "0"),
       paidOn: parsed.data.paidOn,
       method: parsed.data.method,
-      note: parsed.data.note,
-      idempotencyKey: `manual:${parsed.data.chargeId}:${parsed.data.paidOn}:${amountCents}:${parsed.data.note}`,
+      note: "",
+      idempotencyKey: parsed.data.idempotencyKey,
     });
-    revalidatePath("/parcelas");
-    revalidatePath("/");
-    return { ok: true as const };
+    refreshMoney();
+    return { ok: true as const, paymentId, warning };
   } catch (error) {
     return fail(error);
   }
@@ -154,9 +214,9 @@ export async function payAction(raw: unknown) {
 export async function reverseAction(chargeId: string) {
   try {
     const { db, org } = await allow("pagamentos.estornar");
-    await reverseCharge(db, org.id, chargeId);
-    revalidatePath("/cobrancas");
-    return { ok: true as const };
+    const { warning } = await reverseWithAsaas(db, org.id, chargeId);
+    refreshMoney();
+    return { ok: true as const, warning };
   } catch (error) {
     return fail(error);
   }
@@ -167,9 +227,23 @@ export async function dueAction(raw: unknown) {
   if (!parsed.success) return { ok: false as const, error: "Informe o novo vencimento." };
   try {
     const { db, org } = await allow("pagamentos.registrar");
-    await changeDueDate(db, org.id, parsed.data.installmentId, parsed.data.dueOn);
-    revalidatePath("/parcelas");
+    await changeDueDate(db, org.id, parsed.data.chargeId, parsed.data.dueOn);
+    refreshMoney();
     return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function createChargeAction(raw: unknown) {
+  const parsed = chargeSchema.safeParse(raw);
+  if (!parsed.success) return { ok: false as const, error: "Escolha o cliente, o valor e o vencimento." };
+  try {
+    const { db, org } = await allow("cobrancas.gravar");
+    await assertCanSell(db, org);
+    const chargeId = await createCharge(db, org.id, { clientId: parsed.data.clientId, amountCents: priceOf(parsed.data.amount), dueOn: parsed.data.dueOn, method: parsed.data.method });
+    refreshMoney();
+    return { ok: true as const, chargeId };
   } catch (error) {
     return fail(error);
   }
@@ -179,134 +253,200 @@ export async function cancelSaleAction(saleId: string) {
   try {
     const { db, org } = await allow("vendas.cancelar");
     await cancelSale(db, org.id, saleId);
-    revalidatePath("/vendas");
-    revalidatePath("/");
+    refreshMoney();
     return { ok: true as const };
   } catch (error) {
     return fail(error);
   }
 }
 
-export async function contractAction(id: string, status: "ativo" | "suspenso" | "encerrado") {
+export async function deleteSaleAction(saleId: string) {
+  try {
+    const { db, org } = await allow("vendas.excluir");
+    await deleteSale(db, org.id, saleId);
+    refreshMoney();
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function contractForSaleAction(saleId: string) {
   try {
     const { db, org } = await allow("contratos.alterar");
-    await setContractStatus(db, org.id, id, status);
-    revalidatePath("/contratos");
-    return { ok: true as const };
+    const contractId = await createContractForSale(db, org.id, saleId);
+    revalidatePath(`/vendas/${saleId}`);
+    return { ok: true as const, contractId };
   } catch (error) {
     return fail(error);
   }
 }
 
-export async function recurrenceAction(id: string, status: "ativa" | "suspensa" | "cancelada") {
-  const { db, org } = await allow("recorrencias.alterar");
-  await setRecurrenceStatus(db, org.id, id, status);
-  revalidatePath("/recorrencias");
-}
-
-export async function contactAction(raw: unknown) {
-  const parsed = contactSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false as const, error: "Revise o contato." };
-  const { db, org } = await allow("cobrancas.contatar");
-  const [client] = await db.select().from(clients).where(and(eq(clients.organizationId, org.id), eq(clients.id, parsed.data.clientId)));
-  if (!client) return { ok: false as const, error: "Cliente não encontrado." };
-  await db.insert(contacts).values({
-    id: crypto.randomUUID(),
-    organizationId: org.id,
-    clientId: parsed.data.clientId,
-    chargeId: parsed.data.chargeId,
-    channel: parsed.data.channel,
-    summary: parsed.data.summary,
-    promiseOn: parsed.data.promiseOn || null,
-    createdAt: new Date().toISOString(),
-  });
-  revalidatePath("/inadimplencia");
-  return { ok: true as const };
-}
-
-const environments = {
-  demonstracao: "Demo",
-  sandbox: "Sandbox",
-  producao: "Produção",
-} as const;
-
-export async function asaasAction(command: "connect" | "disconnect" | "sync" | "demonstracao" | "sandbox" | "producao") {
-  const { db, org } = await allow("empresa.gravar");
-  const now = new Date().toISOString();
-  if (command === "connect") {
-    await db.update(organizations).set({ asaasConnected: true, asaasEnvironment: "demonstracao", asaasSyncedAt: now }).where(eq(organizations.id, org.id));
-    await db.insert(integrationEvents).values({
-      id: crypto.randomUUID(),
-      organizationId: org.id,
-      happenedAt: now,
-      kind: "CONEXAO_SIMULADA",
-      status: "sucesso",
-      description: "Conexão marcada. A chave, se houver, continua só no cofre.",
-    });
-  } else if (command === "disconnect") {
-    await db.update(organizations).set({
-      asaasConnected: false,
-      asaasApiKeyCipher: null,
-      asaasWebhookCipher: null,
-      asaasWebhookHash: null,
-      asaasKeyHint: null,
-    }).where(eq(organizations.id, org.id));
-    await db.insert(integrationEvents).values({
-      id: crypto.randomUUID(),
-      organizationId: org.id,
-      happenedAt: now,
-      kind: "DESCONEXAO_SIMULADA",
-      status: "info",
-      description: "Chave cifrada apagada.",
-    });
-  } else if (command === "sync") {
-    await db.update(organizations).set({ asaasSyncedAt: now }).where(eq(organizations.id, org.id));
-    await db.insert(integrationEvents).values({
-      id: crypto.randomUUID(),
-      organizationId: org.id,
-      happenedAt: now,
-      kind: "SINCRONIZACAO_SIMULADA",
-      status: "sucesso",
-      description: "Horário de sincronização atualizado.",
-    });
-  } else {
-    await db.update(organizations).set({ asaasEnvironment: command }).where(eq(organizations.id, org.id));
-    await db.insert(integrationEvents).values({
-      id: crypto.randomUUID(),
-      organizationId: org.id,
-      happenedAt: now,
-      kind: "AMBIENTE_VISUAL",
-      status: "info",
-      description: `Ambiente visual alterado para ${environments[command]}. Nenhuma credencial foi pedida.`,
-    });
+export async function endSubscriptionAction(saleId: string) {
+  try {
+    const { db, org } = await allow("recorrencias.alterar");
+    await endSubscription(db, org.id, saleId, todayIn(org.timezone));
+    refreshMoney();
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
   }
-  revalidatePath("/integracoes");
 }
 
 export async function resetDemoAction() {
-  const { db, org, userName } = await allow("demo.resetar");
+  const { db, org, userName, publicDemo } = await allow("demo.resetar");
+  if (!publicDemo) throw new DomainError("Só a demonstração pública pode ser restaurada.");
   await resetOrganization(db, org.id, userName);
   revalidatePath("/", "layout");
 }
 
 export async function companyAction(formData: FormData) {
-  const { db, org } = await allow("empresa.gravar");
-  const document = String(formData.get("document") || org.document);
-  if (!isValidCnpj(document)) return { ok: false as const, error: "CNPJ inválido." };
-  await db
-    .update(organizations)
-    .set({
-      tradeName: String(formData.get("tradeName") || org.tradeName),
-      legalName: String(formData.get("legalName") || org.legalName),
-      document,
-      email: String(formData.get("email") || org.email),
-      phone: String(formData.get("phone") || org.phone),
-      address: String(formData.get("address") || org.address),
-      timezone: String(formData.get("timezone") || org.timezone),
-    })
-    .where(eq(organizations.id, org.id));
-  revalidatePath("/configuracoes");
-  return { ok: true as const };
+  try {
+    const { db, org } = await allow("empresa.gravar");
+    const document = String(formData.get("document") || "").trim();
+    if (document && !isValidCnpj(document) && documentKind(document) !== "pf") return { ok: false as const, error: "CNPJ ou CPF inválido." };
+    const timezone = String(formData.get("timezone") || org.timezone);
+    if (timezone !== org.timezone && !isBrazilZone(timezone)) return { ok: false as const, error: "Escolha um fuso horário da lista." };
+    let late: { lateFineBp: number; lateInterestMonthlyBp: number };
+    try {
+      late = {
+        lateFineBp: parsePercentBp(String(formData.get("lateFine") || "0")),
+        lateInterestMonthlyBp: parsePercentBp(String(formData.get("lateInterest") || "0")),
+      };
+    } catch {
+      return { ok: false as const, error: "Informe multa e juros como percentual, por exemplo 2 ou 1,5." };
+    }
+    const lateError = lateSettingsError(late);
+    if (lateError) return { ok: false as const, error: lateError };
+    const tradeName = String(formData.get("tradeName") || "").trim();
+    if (tradeName.length < 2) return { ok: false as const, error: "Informe o nome da empresa." };
+    await db
+      .update(organizations)
+      .set({
+        ...late,
+        tradeName,
+        legalName: String(formData.get("legalName") || "").trim(),
+        document,
+        email: String(formData.get("email") || "").trim(),
+        phone: String(formData.get("phone") || "").trim(),
+        address: String(formData.get("address") || "").trim(),
+        timezone,
+      })
+      .where(eq(organizations.id, org.id));
+    revalidatePath("/", "layout");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function receivingAction(formData: FormData) {
+  try {
+    const { db, org } = await allow("empresa.gravar");
+    const mode = String(formData.get("mode") || "gestao");
+    if (mode !== "gestao" && mode !== "integrado") return { ok: false as const, error: "Escolha como você recebe." };
+    const pixKey = String(formData.get("pixKey") || "").trim().slice(0, 140);
+    const paymentInstructions = String(formData.get("instructions") || "").trim().slice(0, 600);
+    await setReceivingMode(db, org.id, mode);
+    await db.update(organizations).set({ pixKey, paymentInstructions }).where(eq(organizations.id, org.id));
+    revalidatePath("/", "layout");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+// A chave do lojista só passa por aqui para descobrir a carteira. Nada dela é guardado nem devolvido.
+export async function connectAsaasAction(apiKey: string) {
+  try {
+    const { db, org } = await allow("empresa.gravar");
+    const { accountName } = await linkMerchantAccount(db, org.id, apiKey);
+    revalidatePath("/", "layout");
+    return { ok: true as const, accountName };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function openSubaccountAction(formData: FormData) {
+  try {
+    const { db, org } = await allow("empresa.gravar");
+    await openSubaccount(db, org.id, Object.fromEntries(formData));
+    revalidatePath("/", "layout");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function withdrawAction(amount: string, pixKey: string) {
+  try {
+    const { db, org } = await allow("saque.solicitar");
+    let amountCents;
+    try {
+      amountCents = parseReais(amount);
+    } catch {
+      return { ok: false as const, error: "Informe o valor, por exemplo 150,00." };
+    }
+    await requestWithdrawal(db, org, await loadPlatformSettings(db), { amountCents, pixKey });
+    revalidatePath("/saque");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function disconnectAsaasAction() {
+  try {
+    const { db, org } = await allow("empresa.gravar");
+    await unlinkMerchantAccount(db, org.id);
+    revalidatePath("/", "layout");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function savePlatformAction(formData: FormData) {
+  try {
+    const { db, viewerEmail, userName } = await owner();
+    const input = parsePlatformForm({
+      environment: formData.get("environment"),
+      apiKey: formData.get("apiKey") ?? "",
+      webhookToken: formData.get("webhookToken") ?? "",
+      fee: formData.get("fee"),
+      planGestao: formData.get("planGestao"),
+      planIntegrado: formData.get("planIntegrado"),
+    });
+    await savePlatformSettings(db, input, viewerEmail || userName);
+    revalidatePath("/", "layout");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+// O token volta em texto puro só nesta resposta, para o dono colar no Asaas. Depois disso só existe cifrado.
+export async function generateWebhookTokenAction() {
+  try {
+    const { db, viewerEmail, userName } = await owner();
+    const token = await generateWebhookToken(db, viewerEmail || userName);
+    revalidatePath("/plataforma");
+    return { ok: true as const, token };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function testPlatformConnectionAction() {
+  try {
+    const { db } = await owner();
+    const result = await testPlatformConnection(db);
+    revalidatePath("/plataforma");
+    return { ok: true as const, accountName: result.accountName, environment: result.environment, walletTail: result.walletId.slice(-6) };
+  } catch (error) {
+    return fail(error);
+  }
 }
 
 export async function inviteAction(formData: FormData) {
@@ -317,49 +457,65 @@ export async function inviteAction(formData: FormData) {
     const role = String(formData.get("role") || "");
     if (name.length < 2 || !email.includes("@") || !isRole(role)) return { ok: false as const, error: "Revise o convite." };
     await db.insert(members).values({ id: crypto.randomUUID(), organizationId: org.id, name, email, role, active: true });
-    revalidatePath("/configuracoes");
+    revalidatePath("/equipe");
     return { ok: true as const };
   } catch (error) {
     return fail(error);
   }
 }
 
-export async function roleAction(memberId: string, role: string) {
+export async function updateMemberAction(memberId: string, input: { name: string; email: string; role: string }) {
   try {
     const { db, org } = await allow("equipe.convidar");
-    if (!isRole(role)) return { ok: false as const, error: "Papel inválido." };
-    const team = await db.select().from(members).where(eq(members.organizationId, org.id));
-    const target = team.find((member) => member.id === memberId);
-    if (!target) return { ok: false as const, error: "Pessoa não encontrada." };
-    const admins = team.filter((member) => member.role === "administrador" && member.id !== memberId);
-    if (target.role === "administrador" && role !== "administrador" && admins.length === 0) {
-      return { ok: false as const, error: "A empresa precisa de um administrador." };
-    }
-    await db.update(members).set({ role }).where(and(eq(members.organizationId, org.id), eq(members.id, memberId)));
-    revalidatePath("/configuracoes");
+    await updateMember(db, org.id, memberId, input);
+    revalidatePath("/equipe");
     return { ok: true as const };
   } catch (error) {
     return fail(error);
   }
 }
 
-export async function subscribeAction(planCode: string) {
+// Pedido do titular (LGPD, art. 18). O histórico fiscal fica e só os dados pessoais saem quando há venda ou cobrança.
+export async function eraseClientAction(clientId: string) {
+  try {
+    const { db, org } = await allow("clientes.dados");
+    const outcome = await eraseClient(db, org.id, clientId);
+    revalidatePath("/clientes");
+    return { ok: true as const, outcome };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function removeMemberAction(memberId: string) {
+  try {
+    const { db, org, viewerEmail } = await allow("equipe.convidar");
+    await removeMember(db, org.id, memberId, viewerEmail);
+    revalidatePath("/equipe");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+// Contratar leva o lojista à fatura do Asaas. Quem já tem assinatura só troca de plano, ou volta à fatura em aberto.
+export async function subscribeAction(planCode: string, document: string) {
   try {
     const { db, org } = await allow("assinatura.gerir");
     if (!isPlan(planCode)) return { ok: false as const, error: "Plano inválido." };
-    await subscribe(db, org.id, planCode, todayIn(org.timezone));
-    revalidatePath("/assinatura");
-    return { ok: true as const };
+    const choice = await choosePlan(db, org.id, planCode, { document });
+    revalidatePath("/", "layout");
+    return { ok: true as const, ...choice };
   } catch (error) {
     return fail(error);
   }
 }
 
-export async function payPlatformAction(invoiceId: string) {
+export async function cancelPlanAction() {
   try {
     const { db, org } = await allow("assinatura.gerir");
-    await payPlatformInvoice(db, org.id, invoiceId, todayIn(org.timezone));
-    revalidatePath("/assinatura");
+    await cancelPlan(db, org.id);
+    revalidatePath("/", "layout");
     return { ok: true as const };
   } catch (error) {
     return fail(error);
@@ -405,30 +561,6 @@ export async function cancelFiscalAction(documentId: string) {
   }
 }
 
-export async function adjustStockAction(itemId: string, quantity: number) {
-  try {
-    const { db, org } = await allow("estoque.ajustar");
-    if (!Number.isInteger(quantity) || quantity < 0) return { ok: false as const, error: "Informe uma quantidade inteira." };
-    const [item] = await db.select().from(catalogItems).where(and(eq(catalogItems.organizationId, org.id), eq(catalogItems.id, itemId)));
-    if (!item || item.kind === "servico") return { ok: false as const, error: "Serviço não controla estoque." };
-    const delta = quantity - (item.stockQuantity ?? 0);
-    await db.update(catalogItems).set({ stockQuantity: quantity }).where(eq(catalogItems.id, itemId));
-    await db.insert(stockMoves).values({
-      id: crypto.randomUUID(),
-      organizationId: org.id,
-      catalogItemId: itemId,
-      saleId: null,
-      quantity: delta,
-      reason: "ajuste",
-      createdAt: new Date().toISOString(),
-    });
-    revalidatePath("/produtos");
-    return { ok: true as const };
-  } catch (error) {
-    return fail(error);
-  }
-}
-
 export async function campaignAction(formData: FormData) {
   try {
     const { db, org } = await allow("mensagens.enviar");
@@ -468,97 +600,4 @@ export async function supportAction(formData: FormData) {
   } catch (error) {
     return fail(error);
   }
-}
-
-const sessionCookie = "recebe_session";
-
-function sessionCookieOptions(expiresAt: string) {
-  return { httpOnly: true, sameSite: "lax" as const, secure: process.env.NODE_ENV === "production", path: "/", expires: new Date(expiresAt) };
-}
-
-export async function signupAction(formData: FormData) {
-  try {
-    const { getDb } = await import("../lib/db");
-    const db = await getDb();
-    const organizationId = await registerCompany(db, {
-      tradeName: String(formData.get("tradeName") || ""),
-      legalName: String(formData.get("legalName") || ""),
-      document: String(formData.get("document") || ""),
-      email: String(formData.get("email") || ""),
-      password: String(formData.get("password") || ""),
-    });
-    const opened = await openAuthSession(db, organizationId);
-    const jar = await cookies();
-    jar.set(sessionCookie, opened.token, sessionCookieOptions(opened.expiresAt));
-    return { ok: true as const };
-  } catch (error) {
-    return fail(error);
-  }
-}
-
-export async function loginAction(formData: FormData) {
-  try {
-    const { getDb } = await import("../lib/db");
-    const db = await getDb();
-    const org = await authenticate(db, String(formData.get("email") || ""), String(formData.get("password") || ""));
-    if (!org) return { ok: false as const, error: "E-mail ou senha não conferem." };
-    const opened = await openAuthSession(db, org.id);
-    const jar = await cookies();
-    jar.set(sessionCookie, opened.token, sessionCookieOptions(opened.expiresAt));
-    return { ok: true as const };
-  } catch (error) {
-    return fail(error);
-  }
-}
-
-export async function logoutAction() {
-  const jar = await cookies();
-  const token = jar.get(sessionCookie)?.value;
-  if (token) {
-    const { getDb } = await import("../lib/db");
-    const db = await getDb();
-    await db.delete(authSessions).where(eq(authSessions.tokenHash, tokenHash(token)));
-  }
-  jar.delete(sessionCookie);
-  redirect("/entrar");
-}
-
-export async function saveAsaasAction(formData: FormData) {
-  try {
-    const { db, org } = await allow("empresa.gravar");
-    const saved = await saveAsaasCredentials(db, org.id, {
-      apiKey: String(formData.get("apiKey") || ""),
-      environment: String(formData.get("environment") || ""),
-    });
-    revalidatePath("/integracoes");
-    return { ok: true as const, accountName: saved.accountName, webhookToken: saved.webhookToken };
-  } catch (error) {
-    return fail(error);
-  }
-}
-
-export async function revealWebhookAction() {
-  try {
-    const { org } = await allow("empresa.gravar");
-    return { ok: true as const, webhookToken: await webhookTokenFor(org) };
-  } catch (error) {
-    return fail(error);
-  }
-}
-
-export async function issueAsaasChargeAction(chargeId: string) {
-  try {
-    const { db, org } = await allow("pagamentos.registrar");
-    await issueAsaasCharge(db, org.id, chargeId);
-    revalidatePath("/cobrancas");
-    return { ok: true as const };
-  } catch (error) {
-    return fail(error);
-  }
-}
-
-export async function deleteClientAction(clientId: string) {
-  const { db, org } = await allow("clientes.gravar");
-  await eraseClient(db, org.id, clientId);
-  redirect("/clientes");
 }

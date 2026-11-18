@@ -6,6 +6,8 @@ export const permissions = [
   "catalogo.gravar",
   "vendas.criar",
   "vendas.cancelar",
+  "vendas.editar",
+  "vendas.excluir",
   "pagamentos.registrar",
   "pagamentos.estornar",
   "contratos.alterar",
@@ -17,19 +19,29 @@ export const permissions = [
   "estoque.ajustar",
   "mensagens.enviar",
   "cobrancas.contatar",
+  "cobrancas.gravar",
   "suporte.abrir",
   "relatorios.ler",
   "demo.resetar",
+  "saque.solicitar",
+  "clientes.dados",
 ] as const;
 
 export type Permission = (typeof permissions)[number];
 
 const grants: Record<Role, readonly Permission[] | "*"> = {
   administrador: "*",
-  financeiro: ["pagamentos.registrar", "pagamentos.estornar", "relatorios.ler", "fiscal.emitir", "contratos.alterar", "recorrencias.alterar", "suporte.abrir", "assinatura.gerir", "cobrancas.contatar"],
-  vendedor: ["clientes.gravar", "vendas.criar", "vendas.cancelar", "catalogo.gravar", "mensagens.enviar", "suporte.abrir", "estoque.ajustar", "cobrancas.contatar"],
+  financeiro: ["pagamentos.registrar", "pagamentos.estornar", "relatorios.ler", "fiscal.emitir", "contratos.alterar", "recorrencias.alterar", "suporte.abrir", "assinatura.gerir", "cobrancas.contatar", "cobrancas.gravar"],
+  vendedor: ["clientes.gravar", "vendas.criar", "vendas.cancelar", "vendas.editar", "vendas.excluir", "catalogo.gravar", "mensagens.enviar", "suporte.abrir", "estoque.ajustar", "cobrancas.contatar"],
   operador: ["pagamentos.registrar", "mensagens.enviar", "suporte.abrir", "relatorios.ler", "cobrancas.contatar"],
 };
+
+// Na demonstração pública todo visitante anônimo é administrador da mesma empresa. Estas ações mudam o que o cliente final vê no link de pagamento ou falam com gente de fora.
+const blockedInDemo: readonly Permission[] = ["clientes.dados", "saque.solicitar", "empresa.gravar", "equipe.convidar", "assinatura.gerir", "fiscal.emitir", "mensagens.enviar", "suporte.abrir"];
+
+export function allowedInDemo(permission: Permission) {
+  return !blockedInDemo.includes(permission);
+}
 
 export function isRole(value: string): value is Role {
   return (roles as readonly string[]).includes(value);

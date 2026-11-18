@@ -7,7 +7,7 @@ import { and, eq } from "drizzle-orm";
 import { openIsolatedDatabase } from "./db";
 import { DomainError, advanceRecurrences, cancelSale, createSale, registerPayment } from "./ledger";
 import { cents } from "./money";
-import { charges, clients, installments, organizations, recurrences, sales } from "./schema";
+import { charges, clients, organizations, recurrences, sales } from "./schema";
 import { ensureOrganization, insertClient, updateClient } from "./tenant";
 
 test("uma venda de R$ 10.000 fecha entrada e quatro parcelas, e rejeita pagamento acima do saldo", async () => {
@@ -24,9 +24,6 @@ test("uma venda de R$ 10.000 fecha entrada e quatro parcelas, e rejeita pagament
     phone: "(92) 90000-0000",
     address: "Rua 1",
     timezone: "America/Manaus",
-    asaasEnvironment: "demonstracao",
-    asaasConnected: false,
-    asaasSyncedAt: null,
     createdAt: new Date().toISOString(),
   });
   const clientId = await insertClient(db, organizationId, {
@@ -59,13 +56,12 @@ test("uma venda de R$ 10.000 fecha entrada e quatro parcelas, e rejeita pagament
     makeContract: true,
     items: [{ catalogItemId: null, description: "Projeto de móveis", kind: "produto", quantity: 1, unitCents: cents(1_000_000) }],
   });
-  const rows = await db.select().from(installments).where(and(eq(installments.organizationId, organizationId), eq(installments.saleId, saleId)));
+  const rows = await db.select().from(charges).where(and(eq(charges.organizationId, organizationId), eq(charges.saleId, saleId)));
+  assert.equal(rows.length, 5);
   assert.equal(rows.reduce((sum, row) => sum + row.amountCents, 0), 1_000_000);
-  assert.equal(rows[0]?.amountCents, 200_000);
-  const entry = rows.find((row) => row.label === "Entrada");
-  assert.ok(entry);
-  const { charges } = await import("./schema");
-  const chargeRows = await db.select().from(charges).where(eq(charges.installmentId, entry.id));
+  const chargeRows = rows.filter((row) => row.label === "Entrada");
+  assert.equal(chargeRows.length, 1);
+  assert.equal(chargeRows[0]?.amountCents, 200_000);
   const paymentId = await registerPayment(db, organizationId, {
     chargeId: chargeRows[0].id,
     amountCents: cents(200_000),
@@ -103,8 +99,8 @@ test("duas aberturas ao mesmo tempo criam uma empresa só", async () => {
   const dir = await mkdtemp(join(tmpdir(), "recebefacil-"));
   const db = await openIsolatedDatabase(dir);
   const [first, second] = await Promise.all([
-    ensureOrganization(db, "viewer:paralelo", "Ana"),
-    ensureOrganization(db, "viewer:paralelo", "Bruno"),
+    ensureOrganization(db, "public:demonstracao", "Ana"),
+    ensureOrganization(db, "public:demonstracao", "Bruno"),
   ]);
   assert.equal(first.id, second.id);
   const rows = await db.select().from(clients).where(eq(clients.organizationId, first.id));
@@ -125,9 +121,6 @@ test("a recorrência gera o ciclo vencido, o cancelamento respeita o recebimento
     phone: "(92) 90000-0000",
     address: "Rua 1",
     timezone: "America/Manaus",
-    asaasEnvironment: "demonstracao",
-    asaasConnected: false,
-    asaasSyncedAt: null,
     createdAt: new Date().toISOString(),
   });
   await db.insert(organizations).values({
@@ -140,9 +133,6 @@ test("a recorrência gera o ciclo vencido, o cancelamento respeita o recebimento
     phone: "(92) 90000-0001",
     address: "Rua 2",
     timezone: "America/Manaus",
-    asaasEnvironment: "demonstracao",
-    asaasConnected: false,
-    asaasSyncedAt: null,
     createdAt: new Date().toISOString(),
   });
   const clientId = await insertClient(db, organizationId, {

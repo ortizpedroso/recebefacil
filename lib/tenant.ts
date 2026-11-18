@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
+import { startTrial } from "./billing";
+import { todayIn } from "./dates";
+import { insertClient } from "./clients";
 import type { DB } from "./db";
 import { cents, type Cents } from "./money";
-import { createSale, DomainError, registerPayment, type SaleInput } from "./ledger";
+import { DomainError } from "./errors";
+import { tracksStock, type CatalogKind } from "./labels";
+import { DEFAULT_COMPANY_NAME, PUBLIC_DEMO_KEY } from "./onboarding";
+import { createSale, registerPayment, type SaleInput } from "./ledger";
 import {
   catalogItems,
   charges,
@@ -10,12 +16,11 @@ import {
   contacts,
   contracts,
   dueChanges,
-  installments,
   campaignRecipients,
   campaigns,
+  catalogImages,
   errorEvents,
   fiscalDocuments,
-  integrationEvents,
   members,
   organizations,
   payments,
@@ -28,102 +33,36 @@ import {
   supportTickets,
 } from "./schema";
 
-export async function insertClient(
-  db: DB,
-  organizationId: string,
-  input: {
-    kind: "pf" | "pj";
-    name: string;
-    document: string;
-    email: string;
-    phone: string;
-    whatsapp: string;
-    zip: string;
-    state: string;
-    city: string;
-    district: string;
-    street: string;
-    number: string;
-    complement: string;
-    notes: string;
-  },
-) {
+export { insertClient, updateClient } from "./clients";
+
+export type CatalogInput = {
+  kind: CatalogKind;
+  name: string;
+  description: string;
+  category: string;
+  sku: string;
+  priceCents: Cents;
+  stockQuantity?: number | null;
+};
+
+// billing é só o espelho do tipo, para quem lê o banco direto.
+const billingOf = (kind: CatalogKind) => (kind === "mensalidade" ? "recorrente" : "pontual");
+
+export async function insertCatalog(db: DB, organizationId: string, input: CatalogInput) {
   const id = randomUUID();
-  await db.insert(clients).values({
-    id,
-    organizationId,
-    ...input,
-    active: true,
-    createdAt: new Date().toISOString(),
-  });
+  const stockQuantity = tracksStock(input.kind) ? input.stockQuantity ?? null : null;
+  await db.insert(catalogItems).values({ id, organizationId, ...input, billing: billingOf(input.kind), stockQuantity, active: true });
   return id;
 }
 
-export async function updateClient(
-  db: DB,
-  organizationId: string,
-  clientId: string,
-  input: {
-    kind: "pf" | "pj";
-    name: string;
-    document: string;
-    email: string;
-    phone: string;
-    whatsapp: string;
-    zip: string;
-    state: string;
-    city: string;
-    district: string;
-    street: string;
-    number: string;
-    complement: string;
-    notes: string;
-  },
-) {
-  const [row] = await db.select().from(clients).where(and(eq(clients.organizationId, organizationId), eq(clients.id, clientId)));
-  if (!row) throw new DomainError("Cliente não encontrado.");
-  await db.update(clients).set(input).where(eq(clients.id, clientId));
-}
-
-export async function insertCatalog(
-  db: DB,
-  organizationId: string,
-  input: {
-    kind: "produto" | "servico";
-    name: string;
-    description: string;
-    category: string;
-    sku: string;
-    priceCents: Cents;
-    billing: "pontual" | "recorrente";
-    stockQuantity?: number | null;
-  },
-) {
-  const id = randomUUID();
-  const stockQuantity = input.kind === "servico" ? null : input.stockQuantity ?? 0;
-  await db.insert(catalogItems).values({ id, organizationId, ...input, stockQuantity, active: true });
-  return id;
-}
-
-export async function updateCatalog(
-  db: DB,
-  organizationId: string,
-  itemId: string,
-  input: {
-    kind: "produto" | "servico";
-    name: string;
-    description: string;
-    category: string;
-    sku: string;
-    priceCents: Cents;
-    billing: "pontual" | "recorrente";
-    stockQuantity?: number | null;
-  },
-) {
+export async function updateCatalog(db: DB, organizationId: string, itemId: string, input: CatalogInput) {
   const [row] = await db.select().from(catalogItems).where(and(eq(catalogItems.organizationId, organizationId), eq(catalogItems.id, itemId)));
   if (!row) throw new DomainError("Item não encontrado.");
-  const stockQuantity = input.kind === "servico" ? null : input.stockQuantity ?? row.stockQuantity;
-  await db.update(catalogItems).set({ ...input, stockQuantity }).where(eq(catalogItems.id, itemId));
+  const stockQuantity = tracksStock(input.kind) ? input.stockQuantity ?? null : null;
+  await db.update(catalogItems).set({ ...input, billing: billingOf(input.kind), stockQuantity }).where(eq(catalogItems.id, itemId));
+  if (stockQuantity !== null && stockQuantity !== row.stockQuantity) {
+    await db.insert(stockMoves).values({ id: randomUUID(), organizationId, catalogItemId: itemId, saleId: null, quantity: stockQuantity - (row.stockQuantity ?? 0), reason: "ajuste", createdAt: new Date().toISOString() });
+  }
 }
 
 async function sale(db: DB, organizationId: string, input: SaleInput) {
@@ -165,7 +104,6 @@ export async function seedOrganization(db: DB, organizationId: string) {
     category: "Imóveis",
     sku: "IMV-01",
     priceCents: cents(4_500_000),
-    billing: "pontual",
     stockQuantity: 5,
   });
   const ar = await insertCatalog(db, organizationId, {
@@ -175,7 +113,6 @@ export async function seedOrganization(db: DB, organizationId: string) {
     category: "Serviços",
     sku: "",
     priceCents: cents(240_000),
-    billing: "pontual",
   });
   await insertCatalog(db, organizationId, {
     kind: "produto",
@@ -184,7 +121,6 @@ export async function seedOrganization(db: DB, organizationId: string) {
     category: "Móveis",
     sku: "MOV-01",
     priceCents: cents(1_200_000),
-    billing: "pontual",
     stockQuantity: 3,
   });
   await insertCatalog(db, organizationId, {
@@ -194,16 +130,14 @@ export async function seedOrganization(db: DB, organizationId: string) {
     category: "Consultoria",
     sku: "",
     priceCents: cents(150_000),
-    billing: "pontual",
   });
   const curso = await insertCatalog(db, organizationId, {
-    kind: "servico",
+    kind: "mensalidade",
     name: "Curso profissionalizante",
     description: "Mensalidade do curso.",
     category: "Educação",
     sku: "",
     priceCents: cents(200_000),
-    billing: "recorrente",
   });
 
   const base = {
@@ -298,17 +232,23 @@ export async function seedOrganization(db: DB, organizationId: string) {
     { id: randomUUID(), organizationId, name: "Rafael Nogueira", email: "rafael@exemplo.com", role: "financeiro", active: true },
     { id: randomUUID(), organizationId, name: "Beatriz Lima", email: "beatriz@exemplo.com", role: "vendedor", active: true },
   ]);
-  await db.insert(integrationEvents).values({
-    id: randomUUID(),
-    organizationId,
-    happenedAt: new Date().toISOString(),
-    kind: "AMBIENTE_INICIALIZADO",
-    status: "info",
-    description: "Módulo do Asaas preparado só para demonstração. Nenhuma chave foi guardada.",
-  });
 }
 
-export async function ensureOrganization(db: DB, viewerKey: string, userName: string) {
+const DEMO_COMPANY = {
+  tradeName: "Horizonte Comércio & Serviços",
+  legalName: "Horizonte Comércio Demonstração Ltda",
+  document: "34.567.890/0001-30",
+  email: "contato@exemplo.com",
+  phone: "(92) 3000-0000",
+  address: "Av. Eduardo Ribeiro, 100, Centro, Manaus - AM",
+  timezone: "America/Manaus",
+  pixKey: "contato@exemplo.com",
+  paymentInstructions: "Depois de pagar, envie o comprovante pelo WhatsApp (92) 3000-0000.",
+};
+
+const NEW_COMPANY = { tradeName: DEFAULT_COMPANY_NAME, legalName: "", document: "", email: "", phone: "", address: "", timezone: "America/Sao_Paulo" };
+
+export async function ensureOrganization(db: DB, viewerKey: string, userName: string, userEmail = "voce@exemplo.com") {
   return db.transaction(async (tx) => {
     const scoped = tx as unknown as DB;
     await scoped.execute(sql`select pg_advisory_xact_lock(hashtext(${viewerKey}))`);
@@ -327,27 +267,21 @@ export async function ensureOrganization(db: DB, viewerKey: string, userName: st
       return existing;
     }
     const id = randomUUID();
+    const demo = viewerKey === PUBLIC_DEMO_KEY;
     await scoped.insert(organizations).values({
       id,
       viewerKey,
-      tradeName: "Horizonte Comércio & Serviços",
-      legalName: "Horizonte Comércio Demonstração Ltda",
-      document: "34.567.890/0001-30",
-      email: "contato@exemplo.com",
-      phone: "(92) 3000-0000",
-      address: "Av. Eduardo Ribeiro, 100, Centro, Manaus - AM",
-      timezone: "America/Manaus",
-      asaasEnvironment: "demonstracao",
-      asaasConnected: false,
-      asaasSyncedAt: null,
+      ...(demo ? DEMO_COMPANY : NEW_COMPANY),
       createdAt: new Date().toISOString(),
     });
-    await seedOrganization(scoped, id);
+    // Só a demonstração pública nasce com dados de exemplo e sem plano. Empresa nova começa vazia, com 14 dias de teste.
+    if (demo) await seedOrganization(scoped, id);
+    else await startTrial(scoped, id, todayIn(NEW_COMPANY.timezone));
     await scoped.insert(members).values({
       id: randomUUID(),
       organizationId: id,
       name: userName,
-      email: "voce@exemplo.com",
+      email: userEmail,
       role: "administrador",
       active: true,
     });
@@ -360,7 +294,7 @@ export async function ensureOrganization(db: DB, viewerKey: string, userName: st
 export async function resetOrganization(db: DB, organizationId: string, userName: string) {
   await db.transaction(async (tx) => {
     const scoped = tx as unknown as DB;
-    const rows = [campaignRecipients, campaigns, stockMoves, fiscalDocuments, platformInvoices, subscriptions, supportTickets, errorEvents, payments, contacts, dueChanges, charges, installments, recurrences, saleItems, contracts, sales, catalogItems, clients, members, integrationEvents];
+    const rows = [campaignRecipients, campaigns, stockMoves, fiscalDocuments, platformInvoices, subscriptions, supportTickets, errorEvents, payments, contacts, dueChanges, charges, recurrences, saleItems, contracts, sales, catalogImages, catalogItems, clients, members];
     for (const table of rows) {
       await scoped.delete(table).where(eq(table.organizationId, organizationId));
     }
