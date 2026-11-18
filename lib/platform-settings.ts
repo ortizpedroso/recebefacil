@@ -131,7 +131,7 @@ async function forgetAsaasWorld(tx: DB) {
     .update(charges)
     .set(NO_LINK)
     .where(and(isNotNull(charges.asaasPaymentId), inArray(charges.status, [...OPEN_STATUSES])));
-  await tx.update(organizations).set({ receivingMode: "gestao", asaasWalletId: "", asaasAccountName: "" }).where(ne(organizations.asaasWalletId, ""));
+  await tx.update(organizations).set({ receivingMode: "gestao", asaasWalletId: "", asaasAccountName: "", asaasAccountId: "", asaasAccountKeyEnc: "", asaasAccountStatus: "" }).where(ne(organizations.asaasWalletId, ""));
   await tx.update(organizations).set({ asaasCustomerId: null }).where(isNotNull(organizations.asaasCustomerId));
   // Assinatura e faturas do plano também moram no Asaas de antes. O acesso segue até o fim do que foi pago, e o lojista contrata de novo.
   await tx.update(subscriptions).set({ asaasSubscriptionId: null, status: "cancelada" }).where(isNotNull(subscriptions.asaasSubscriptionId));

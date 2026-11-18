@@ -29,3 +29,10 @@ test("o visitante simulado do desenvolvimento é dono fora de produção e nunca
   assert.equal(isPlatformOwner(simulated, { NODE_ENV: "production" }), false);
   assert.equal(isPlatformOwner(simulated, { NODE_ENV: "production", PLATFORM_OWNER_EMAILS: "dev@example.com" }), false);
 });
+
+test("em produção o visitante simulado só é dono com a liberação local explícita", () => {
+  const simulated = { publicDemo: false, viewerEmail: "dev@example.com", simulatedViewer: true };
+  assert.equal(isPlatformOwner(simulated, { NODE_ENV: "production", RECEBEFACIL_LOCAL_OWNER: "1" }), true);
+  assert.equal(isPlatformOwner(simulated, { NODE_ENV: "production", RECEBEFACIL_LOCAL_OWNER: "true" }), false);
+  assert.equal(isPlatformOwner({ publicDemo: true, viewerEmail: "", simulatedViewer: true }, { NODE_ENV: "production", RECEBEFACIL_LOCAL_OWNER: "1" }), false);
+});

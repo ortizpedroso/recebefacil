@@ -328,6 +328,24 @@ alter table platform_invoices add column if not exists asaas_payment_id text;
 alter table platform_invoices add column if not exists invoice_url text;
 create unique index if not exists subscriptions_asaas_subscription on subscriptions (asaas_subscription_id) where asaas_subscription_id is not null;
 create unique index if not exists platform_invoices_asaas_payment on platform_invoices (asaas_payment_id) where asaas_payment_id is not null;
+alter table organizations add column if not exists asaas_account_id text not null default '';
+alter table organizations add column if not exists asaas_account_key_enc text not null default '';
+alter table organizations add column if not exists asaas_account_status text not null default '';
+create table if not exists withdrawals (
+  id text primary key,
+  organization_id text not null,
+  amount_cents integer not null check (amount_cents > 0),
+  fee_cents integer not null default 0,
+  pix_key text not null,
+  pix_key_type text not null,
+  status text not null default 'pendente' check (status in ('pendente', 'processando', 'pago', 'falhou', 'cancelado')),
+  asaas_transfer_id text,
+  fail_reason text not null default '',
+  created_at text not null,
+  updated_at text not null
+);
+create index if not exists withdrawals_org on withdrawals (organization_id, created_at);
+create unique index if not exists withdrawals_asaas_transfer on withdrawals (asaas_transfer_id) where asaas_transfer_id is not null;
 `;
 
 // Blocos com ponto e vírgula interno rodam inteiros, na ordem, depois do SCHEMA_SQL.

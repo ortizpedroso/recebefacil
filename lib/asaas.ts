@@ -147,6 +147,38 @@ const identificationSchema = z.object({ identificationField: z.string().min(1) }
 const deletedSchema = z.object({ deleted: z.boolean().optional() });
 
 export type PixQr = z.output<typeof pixSchema>;
+
+const newAccountSchema = z.object({ id: z.string().min(1), walletId: z.string().min(1), apiKey: z.string().min(1) });
+const accountStatusSchema = z.object({ general: z.string().nullish() }).transform((raw) => ({ general: raw.general ?? "PENDING" }));
+const balanceSchema = z.object({ balance: z.number() }).transform((raw) => ({ balanceCents: fromReais(raw.balance) }));
+const transferSchema = z
+  .object({ id: z.string().min(1), status: z.string(), value: z.number(), transferFee: z.number().nullish(), failReason: text, externalReference: text })
+  .transform((raw) => ({
+    id: raw.id,
+    status: raw.status,
+    valueCents: fromReais(raw.value),
+    feeCents: fromReais(raw.transferFee ?? 0),
+    failReason: raw.failReason ?? "",
+    externalReference: raw.externalReference ?? null,
+  }));
+export type AsaasTransfer = z.output<typeof transferSchema>;
+export type PixKeyType = "CPF" | "CNPJ" | "EMAIL" | "PHONE" | "EVP";
+
+// O que o Asaas pede para abrir uma subconta. companyType só vale para CNPJ.
+export type NewAccount = {
+  name: string;
+  email: string;
+  cpfCnpj: string;
+  birthDate?: string;
+  companyType?: "MEI" | "LIMITED" | "INDIVIDUAL" | "ASSOCIATION";
+  mobilePhone: string;
+  incomeValueCents: Cents;
+  address: string;
+  addressNumber: string;
+  complement?: string;
+  province: string;
+  postalCode: string;
+};
 export type SplitShare = { walletId: string; percentualValue: number };
 export type NewPayment = {
   customer: string;
@@ -263,6 +295,41 @@ export function createAsaasClient(deps: AsaasDeps) {
     async getMyAccount(): Promise<{ name: string; walletId: string | null }> {
       const account = await request({ method: "GET", path: "/myAccount" }, accountSchema);
       return { name: account.name || account.company || account.tradingName || "", walletId: account.walletId || null };
+    },
+
+    createAccount(input: NewAccount): Promise<z.output<typeof newAccountSchema>> {
+      const { incomeValueCents, ...rest } = input;
+      return request({ method: "POST", path: "/accounts", body: { ...rest, incomeValue: toReais(incomeValueCents) } }, newAccountSchema);
+    },
+
+    getAccountStatus(): Promise<{ general: string }> {
+      return request({ method: "GET", path: "/myAccount/status" }, accountStatusSchema);
+    },
+
+    getBalance(): Promise<{ balanceCents: Cents }> {
+      return request({ method: "GET", path: "/finance/balance" }, balanceSchema);
+    },
+
+    createTransfer(input: { valueCents: Cents; pixKey: string; pixKeyType: PixKeyType; description: string; externalReference: string }): Promise<AsaasTransfer> {
+      return request(
+        {
+          method: "POST",
+          path: "/transfers",
+          body: {
+            value: toReais(input.valueCents),
+            operationType: "PIX",
+            pixAddressKey: input.pixKey,
+            pixAddressKeyType: input.pixKeyType,
+            description: input.description.slice(0, 140),
+            externalReference: input.externalReference,
+          },
+        },
+        transferSchema,
+      );
+    },
+
+    getTransfer(id: string): Promise<AsaasTransfer> {
+      return request({ method: "GET", path: `/transfers/${encodeURIComponent(id)}` }, transferSchema);
     },
 
     async getWallets(): Promise<{ id: string }[]> {

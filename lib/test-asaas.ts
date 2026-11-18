@@ -57,6 +57,8 @@ export function fakeAsaas(options: Options = {}) {
   const subscriptions = new Map<string, FakeSubscription>();
   const customers = new Map<string, string>();
   const failures: Failure[] = [];
+  const accounts = new Map<string, { id: string; status: string; balance: number }>();
+  const transfers = new Map<string, { id: string; key: string; value: number; status: string; externalReference: string | null }>();
   let sequence = 0;
   const state = { pixExpiresAt: options.pixExpiresAt ?? "2099-01-01 23:59:59" };
 
@@ -107,6 +109,27 @@ export function fakeAsaas(options: Options = {}) {
     const key = call.token ?? "";
     if (!(key in wallets)) return json(401, { errors: [{ code: "invalid_access_token", description: `Chave ${key} inválida.` }] });
 
+    if (method === "POST" && path === "/accounts") {
+      sequence += 1;
+      const subKey = `sub-key-${prefix}${sequence}`;
+      wallets[subKey] = `wallet-sub-${prefix}${sequence}`;
+      accounts.set(subKey, { id: `acc_${prefix}${sequence}`, status: "PENDING", balance: 0 });
+      return json(200, { id: `acc_${prefix}${sequence}`, walletId: wallets[subKey], apiKey: subKey });
+    }
+    if (method === "GET" && path === "/myAccount/status") return json(200, { general: accounts.get(key)?.status ?? "APPROVED" });
+    if (method === "GET" && path === "/finance/balance") return json(200, { balance: accounts.get(key)?.balance ?? 0 });
+    if (method === "POST" && path === "/transfers") {
+      sequence += 1;
+      const body = call.body ?? {};
+      const transfer = { id: `tra_${prefix}${sequence}`, key, value: Number(body.value), status: "PENDING", externalReference: (body.externalReference as string) ?? null };
+      transfers.set(transfer.id, transfer);
+      return json(200, { ...transfer, transferFee: 0 });
+    }
+    const transferMatch = /^\/transfers\/([^/]+)$/.exec(path);
+    if (method === "GET" && transferMatch) {
+      const transfer = transfers.get(decodeURIComponent(transferMatch[1]));
+      return transfer && transfer.key === key ? json(200, { ...transfer, transferFee: 0 }) : json(404, { errors: [{ code: "not_found", description: "Transferência não encontrada." }] });
+    }
     if (method === "GET" && path === "/wallets/") return json(200, { object: "list", data: [{ id: wallets[key] }] });
     if (method === "GET" && path === "/myAccount") return json(200, { name: options.accountName ?? "Loja de Teste", walletId: wallets[key] });
     if (method === "GET" && path === "/customers") {
@@ -220,6 +243,18 @@ export function fakeAsaas(options: Options = {}) {
     subscriptions,
     customers,
     state,
+    accounts,
+    transfers,
+    setAccount(subKey: string, fields: { status?: string; balance?: number }) {
+      const account = accounts.get(subKey);
+      if (!account) throw new Error(`subconta ${subKey} não existe no Asaas de mentira`);
+      Object.assign(account, fields);
+    },
+    setTransferStatus(id: string, status: string) {
+      const transfer = transfers.get(id);
+      if (!transfer) throw new Error(`transferência ${id} não existe no Asaas de mentira`);
+      transfer.status = status;
+    },
     callsTo: (method: string, pattern: RegExp) => calls.filter((call) => call.method === method && pattern.test(call.path)),
     // O pagador pagou: o status muda do lado do Asaas, como no mundo real.
     settle(id: string, status = "RECEIVED", paymentDate = "2026-11-17") {

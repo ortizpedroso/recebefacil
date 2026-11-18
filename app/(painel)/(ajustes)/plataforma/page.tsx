@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { PlatformForm } from "@/components/platform-form";
-import { Card, Table, Title } from "@/components/ui";
+import { Card, Table } from "@/components/ui";
 import { WEBHOOK_EVENTS_TO_ENABLE } from "@/lib/asaas-webhook";
 import { listSubscribers, PLAN_LABEL, STATE_LABEL } from "@/lib/billing";
 import { formatDateBR, todayIn } from "@/lib/dates";
@@ -19,8 +19,14 @@ export default async function PlataformaPage() {
   const subscribers = await listSubscribers(session.db, todayIn("America/Sao_Paulo"));
   return (
     <div className="space-y-4">
-      <Title hint="Credenciais do Asaas, taxa e planos. Só o dono da plataforma vê esta página.">Plataforma</Title>
       <PlatformForm view={view} webhookUrl={`${origin}/api/webhooks/asaas`} events={WEBHOOK_EVENTS_TO_ENABLE} />
+      <Card className="space-y-2 text-sm text-slate-700">
+        <h2 className="font-bold text-slate-900">Subcontas e saques dos lojistas</h2>
+        <p>Os lojistas abrem a conta de recebimento pela chave desta plataforma. Peça ao Asaas para liberar a criação de subcontas na sua conta antes de usar em produção.</p>
+        <p>Cada saque de subconta pede autorização a esta plataforma. No Asaas, abra Integrações, Mecanismos de segurança, Validação de saque via webhook, e use:</p>
+        <p className="break-all rounded-lg bg-slate-50 px-3 py-2 font-mono text-[13px] text-slate-900">{`${origin}/api/webhooks/asaas/saque`}</p>
+        <p>O token é o mesmo do webhook de cobranças. Só passa saque pedido pelo próprio lojista no RecebeFácil, com o mesmo valor.</p>
+      </Card>
       <Card className="space-y-3">
         <div>
           <h2 className="font-bold text-slate-900">Assinantes</h2>

@@ -1,5 +1,5 @@
 import { CompanyForm } from "@/components/settings-forms";
-import { Card, Title } from "@/components/ui";
+import { Card } from "@/components/ui";
 import { roleLabel } from "@/lib/access";
 import { requireSession } from "@/lib/session";
 
@@ -8,7 +8,6 @@ export default async function ConfiguracoesPage() {
   const { org } = session;
   return (
     <div className="space-y-4">
-      <Title hint="Estes dados aparecem no recibo, no contrato e no link de pagamento.">Minha empresa</Title>
       <Card>
         <CompanyForm
           company={{ tradeName: org.tradeName, legalName: org.legalName, document: org.document, email: org.email, phone: org.phone, address: org.address, timezone: org.timezone, lateFineBp: org.lateFineBp, lateInterestMonthlyBp: org.lateInterestMonthlyBp }}

@@ -3,12 +3,14 @@
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useState } from "react";
-import { companyAction, connectAsaasAction, disconnectAsaasAction, inviteAction, receivingAction, roleAction, supportAction } from "@/app/actions";
+import { companyAction, connectAsaasAction, disconnectAsaasAction, inviteAction, receivingAction, removeMemberAction, supportAction, updateMemberAction } from "@/app/actions";
 import { roleLabel, roles } from "@/lib/access";
 import { BRAZIL_ZONES, isBrazilZone } from "@/lib/zones";
 import { maskCpfOrCnpj, maskPhone } from "@/lib/masks";
 import { formatPercent, formatPercentBp } from "@/lib/money";
-import { FormError } from "./dialog";
+import { ConfirmAction } from "./confirm-action";
+import { FormError, Modal } from "./dialog";
+import { SubaccountForm } from "./subaccount-form";
 import { toast } from "./toast";
 import { buttonClass, Field, inputClass, secondaryButtonClass } from "./ui";
 
@@ -83,11 +85,11 @@ export function CompanyForm({ company }: { company: { tradeName: string; legalNa
 
 // planAllowed é falso para quem está no plano Gestão: o modo Integrado fica explicado e com o caminho para trocar de plano.
 export type ReceivingOffer = { available: boolean; planAllowed: boolean; feeBp: number; environment: "sandbox" | "producao" };
-export type ReceivingLink = { accountName: string; walletTail: string } | null;
+// subaccountLabel existe quando a conta foi aberta pela plataforma: ela não se troca nem se solta por aqui.
+export type ReceivingLink = { accountName: string; walletTail: string; subaccountLabel?: string } | null;
 
-const ASAAS_SIGNUP = { sandbox: "https://sandbox.asaas.com/", producao: "https://www.asaas.com/" } as const;
 
-export function ReceivingForm({ pixKey, instructions, initialMode, link, offer }: { pixKey: string; instructions: string; initialMode: "gestao" | "integrado"; link: ReceivingLink; offer: ReceivingOffer }) {
+export function ReceivingForm({ pixKey, instructions, initialMode, link, offer, subaccountDefaults }: { pixKey: string; instructions: string; initialMode: "gestao" | "integrado"; link: ReceivingLink; offer: ReceivingOffer; subaccountDefaults: { document: string; name: string; email: string; phone: string } }) {
   const router = useRouter();
   const [mode, setMode] = useState(initialMode);
   const [error, setError] = useState("");
@@ -180,7 +182,16 @@ export function ReceivingForm({ pixKey, instructions, initialMode, link, offer }
         <div className="space-y-3 rounded-xl border border-[#E2E8F0] bg-slate-50 p-4">
           <p className="text-sm text-slate-700">Você recebe direto na sua conta Asaas. A plataforma fica com {formatPercent(offer.feeBp)}% de cada pagamento.</p>
           {offer.environment === "sandbox" ? <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">Ambiente de testes: use uma conta e uma chave do sandbox. Nenhum dinheiro de verdade se move.</p> : null}
-          {link && !replacing ? (
+          {link?.subaccountLabel ? (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-slate-800">
+                <span className="font-semibold">Conta de recebimento:</span> {link.accountName || "conta Asaas"} · {link.subaccountLabel}
+              </p>
+              <Link href="/saque" className={secondaryButtonClass}>
+                Ver saldo e sacar
+              </Link>
+            </div>
+          ) : link && !replacing ? (
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm text-slate-800">
                 <span className="font-semibold">Conta conectada:</span> {link.accountName || "conta Asaas"} · carteira ••••{link.walletTail}
@@ -196,7 +207,13 @@ export function ReceivingForm({ pixKey, instructions, initialMode, link, offer }
             </div>
           ) : (
             <div className="space-y-2">
-              <Field label="Chave de API da sua conta Asaas" hint="usada uma vez para achar sua conta e depois descartada">
+              {replacing ? null : (
+                <div className="space-y-2 border-b border-[#E2E8F0] pb-3">
+                  <p className="text-sm text-slate-700">Ainda não tem conta no Asaas? Abra a sua por aqui, sem sair do RecebeFácil. O dinheiro dos seus clientes cai nela e você saca por Pix na aba Saque e taxas.</p>
+                  <SubaccountForm defaults={subaccountDefaults} />
+                </div>
+              )}
+              <Field label="Já tem conta no Asaas? Chave de API da sua conta" hint="usada uma vez para achar sua conta e depois descartada">
                 <input
                   type="password"
                   autoComplete="new-password"
@@ -221,9 +238,6 @@ export function ReceivingForm({ pixKey, instructions, initialMode, link, offer }
                     Cancelar
                   </button>
                 ) : null}
-                <a href={ASAAS_SIGNUP[offer.environment]} target="_blank" rel="noopener noreferrer" className="text-sm font-semibold text-teal-700 hover:underline">
-                  Ainda não tem conta? Abra a sua no Asaas
-                </a>
               </div>
               <p className="text-[13px] text-slate-500">No Asaas, a chave fica em Integrações, Chaves de API.</p>
             </div>
@@ -290,40 +304,106 @@ export function InviteForm() {
   );
 }
 
-export function MemberRole({ memberId, name, role }: { memberId: string; name: string; role: string }) {
+type MemberView = { id: string; name: string; email: string; role: string };
+
+// Editar e excluir pedem confirmação: mexer na equipe muda o que outra pessoa consegue fazer.
+export function MemberActions({ member }: { member: MemberView }) {
   const router = useRouter();
-  const [value, setValue] = useState(role);
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(member);
+  const [confirming, setConfirming] = useState(false);
+  const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+
+  function start() {
+    setDraft(member);
+    setConfirming(false);
+    setError("");
+    setOpen(true);
+  }
+
+  async function save() {
+    setPending(true);
+    setError("");
+    const result = await updateMemberAction(member.id, { name: draft.name, email: draft.email, role: draft.role });
+    setPending(false);
+    if (!result.ok) {
+      setError(result.error);
+      setConfirming(false);
+      return;
+    }
+    setOpen(false);
+    toast("Pessoa atualizada.");
+    router.refresh();
+  }
+
+  const changed = draft.name !== member.name || draft.email !== member.email || draft.role !== member.role;
+
   return (
-    <div className="space-y-1">
-      <div className="flex items-center gap-2">
-        <select aria-label={`O que ${name} pode fazer`} className={`${inputClass} w-44`} value={value} onChange={(event) => setValue(event.target.value)}>
-          {roles.map((option) => (
-            <option key={option} value={option}>
-              {roleLabel(option)}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          className={secondaryButtonClass}
-          disabled={value === role}
-          onClick={async () => {
-            setError("");
-            const result = await roleAction(memberId, value);
-            if (!result.ok) {
-              setError(result.error);
-              setValue(role);
-              return;
-            }
-            toast("Permissão alterada.");
-            router.refresh();
-          }}
-        >
-          Salvar
-        </button>
-      </div>
-      <FormError message={error} />
+    <div className="flex items-center gap-2">
+      <span className="hidden text-sm text-slate-600 sm:inline">{roleLabel(member.role as (typeof roles)[number])}</span>
+      <button type="button" className={secondaryButtonClass} onClick={start}>
+        Editar
+      </button>
+      <ConfirmAction
+        label="Excluir"
+        className={secondaryButtonClass}
+        confirmLabel={`Excluir ${member.name}?`}
+        message={`${member.name} perde o acesso ao RecebeFácil desta empresa. As vendas e os recebimentos registrados continuam.`}
+        danger
+        action={() => removeMemberAction(member.id)}
+      />
+      <Modal open={open} onOpenChange={setOpen} title={`Editar ${member.name}`}>
+        {confirming ? (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">
+              Salvar as alterações de {member.name}? {draft.role !== member.role ? `O acesso passa a ser de ${roleLabel(draft.role as (typeof roles)[number])}.` : ""}
+            </p>
+            <FormError message={error} />
+            <div className="flex justify-end gap-2">
+              <button type="button" className={secondaryButtonClass} onClick={() => setConfirming(false)} disabled={pending}>
+                Voltar
+              </button>
+              <button type="button" className={buttonClass} onClick={save} disabled={pending}>
+                {pending ? "Salvando..." : "Confirmar"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <form
+            className="grid gap-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setConfirming(true);
+            }}
+          >
+            <Field label="Nome">
+              <input className={inputClass} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required minLength={2} />
+            </Field>
+            <Field label="E-mail">
+              <input className={inputClass} type="email" value={draft.email} onChange={(event) => setDraft({ ...draft, email: event.target.value })} required />
+            </Field>
+            <Field label="Pode">
+              <select className={inputClass} value={draft.role} onChange={(event) => setDraft({ ...draft, role: event.target.value })}>
+                {roles.map((option) => (
+                  <option key={option} value={option}>
+                    {roleLabel(option)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <FormError message={error} />
+            <div className="flex justify-end gap-2">
+              <button type="button" className={secondaryButtonClass} onClick={() => setOpen(false)}>
+                Cancelar
+              </button>
+              <button type="submit" className={buttonClass} disabled={!changed}>
+                Salvar
+              </button>
+            </div>
+          </form>
+        )}
+      </Modal>
     </div>
   );
 }

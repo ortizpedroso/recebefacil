@@ -34,7 +34,13 @@ export async function linkMerchantAccount(db: DB, organizationId: string, apiKey
   return { accountName: account.name };
 }
 
+// A subconta aberta pela plataforma não se solta: sem a chave dela não há saldo nem saque. Só o modo volta para Gestão.
 export async function unlinkMerchantAccount(db: DB, organizationId: string): Promise<void> {
+  const [org] = await db.select({ accountId: organizations.asaasAccountId }).from(organizations).where(eq(organizations.id, organizationId));
+  if (org?.accountId) {
+    await db.update(organizations).set({ receivingMode: "gestao" }).where(eq(organizations.id, organizationId));
+    return;
+  }
   await db.update(organizations).set({ asaasWalletId: "", asaasAccountName: "", receivingMode: "gestao" }).where(eq(organizations.id, organizationId));
 }
 

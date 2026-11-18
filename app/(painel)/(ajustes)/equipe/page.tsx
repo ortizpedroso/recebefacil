@@ -1,6 +1,6 @@
 import { asc, eq } from "drizzle-orm";
-import { InviteForm, MemberRole } from "@/components/settings-forms";
-import { Card, Title } from "@/components/ui";
+import { InviteForm, MemberActions } from "@/components/settings-forms";
+import { Card } from "@/components/ui";
 import { roleLabel } from "@/lib/access";
 import { members } from "@/lib/schema";
 import { requireSession } from "@/lib/session";
@@ -10,7 +10,6 @@ export default async function EquipePage() {
   const team = await session.db.select().from(members).where(eq(members.organizationId, session.org.id)).orderBy(asc(members.name));
   return (
     <div className="space-y-4">
-      <Title hint="Quem usa o RecebeFácil na sua empresa e o que cada pessoa pode fazer.">Equipe</Title>
       <Card className="space-y-3">
         <h2 className="font-bold text-slate-900">Convidar alguém</h2>
         <InviteForm />
@@ -25,7 +24,7 @@ export default async function EquipePage() {
                 <span className="block truncate font-semibold text-slate-900">{member.name}</span>
                 <span className="block truncate text-[13px] text-slate-500">{member.email}</span>
               </span>
-              <MemberRole memberId={member.id} name={member.name} role={member.role} />
+              <MemberActions member={{ id: member.id, name: member.name, email: member.email, role: member.role }} />
             </li>
           ))}
         </ul>

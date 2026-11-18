@@ -1,6 +1,9 @@
 import { sql } from "drizzle-orm";
 import { boolean, index, integer, pgTable, text, uniqueIndex } from "drizzle-orm/pg-core";
 
+export type SubaccountStatus = "" | "pendente" | "em_analise" | "aprovada" | "reprovada";
+export type WithdrawalStatus = "pendente" | "processando" | "pago" | "falhou" | "cancelado";
+
 export const organizations = pgTable(
   "organizations",
   {
@@ -21,6 +24,10 @@ export const organizations = pgTable(
     asaasWalletId: text("asaas_wallet_id").notNull().default(""),
     asaasAccountName: text("asaas_account_name").notNull().default(""),
     asaasCustomerId: text("asaas_customer_id"),
+    // Subconta aberta pela plataforma. A chave dela fica cifrada: é com ela que o saldo e o saque são lidos.
+    asaasAccountId: text("asaas_account_id").notNull().default(""),
+    asaasAccountKeyEnc: text("asaas_account_key_enc").notNull().default(""),
+    asaasAccountStatus: text("asaas_account_status").$type<SubaccountStatus>().notNull().default(""),
     createdAt: text("created_at").notNull(),
   },
   (table) => [uniqueIndex("organizations_viewer_key").on(table.viewerKey)],
@@ -373,3 +380,21 @@ export const asaasWebhookEvents = pgTable("asaas_webhook_events", {
   receivedAt: text("received_at").notNull(),
   processedAt: text("processed_at"),
 });
+
+export const withdrawals = pgTable(
+  "withdrawals",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    feeCents: integer("fee_cents").notNull().default(0),
+    pixKey: text("pix_key").notNull(),
+    pixKeyType: text("pix_key_type").notNull(),
+    status: text("status").$type<WithdrawalStatus>().notNull().default("pendente"),
+    asaasTransferId: text("asaas_transfer_id"),
+    failReason: text("fail_reason").notNull().default(""),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [index("withdrawals_org").on(table.organizationId, table.createdAt)],
+);

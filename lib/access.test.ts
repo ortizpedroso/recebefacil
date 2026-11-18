@@ -15,12 +15,15 @@ test("o papel limita a ação", () => {
   assert.equal(can("financeiro", "cobrancas.gravar"), true);
   assert.equal(can("operador", "cobrancas.gravar"), false);
   assert.equal(can("vendedor", "cobrancas.gravar"), false);
+  assert.equal(can("administrador", "saque.solicitar"), true);
+  assert.equal(can("financeiro", "saque.solicitar"), false);
 });
 
 test("a demonstração pública não muda o que o cliente final vê", () => {
   assert.equal(allowedInDemo("empresa.gravar"), false);
   assert.equal(allowedInDemo("equipe.convidar"), false);
   assert.equal(allowedInDemo("mensagens.enviar"), false);
+  assert.equal(allowedInDemo("saque.solicitar"), false);
   assert.equal(allowedInDemo("vendas.criar"), true);
   assert.equal(allowedInDemo("demo.resetar"), true);
 });

@@ -21,6 +21,10 @@ import { cancelPlan, choosePlan } from "../lib/subscription";
 import { catalogSchema, chargeSchema, clientSchema, dueSchema, paymentSchema, saleSchema, toClientInput } from "../lib/schemas";
 import type { z } from "zod";
 import { campaignRecipients, campaigns, catalogItems, clients, fiscalDocuments, members, organizations, sales, supportTickets } from "../lib/schema";
+import { removeMember, updateMember } from "../lib/team";
+import { openSubaccount } from "../lib/subaccount";
+import { requestWithdrawal } from "../lib/withdrawals";
+import { loadPlatformSettings } from "../lib/platform-settings";
 import { insertCatalog, insertClient, resetOrganization, updateCatalog, updateClient } from "../lib/tenant";
 import { isBrazilZone } from "../lib/zones";
 
@@ -363,6 +367,34 @@ export async function connectAsaasAction(apiKey: string) {
   }
 }
 
+export async function openSubaccountAction(formData: FormData) {
+  try {
+    const { db, org } = await allow("empresa.gravar");
+    await openSubaccount(db, org.id, Object.fromEntries(formData));
+    revalidatePath("/", "layout");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function withdrawAction(amount: string, pixKey: string) {
+  try {
+    const { db, org } = await allow("saque.solicitar");
+    let amountCents;
+    try {
+      amountCents = parseReais(amount);
+    } catch {
+      return { ok: false as const, error: "Informe o valor, por exemplo 150,00." };
+    }
+    await requestWithdrawal(db, org, await loadPlatformSettings(db), { amountCents, pixKey });
+    revalidatePath("/saque");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
 export async function disconnectAsaasAction() {
   try {
     const { db, org } = await allow("empresa.gravar");
@@ -431,18 +463,21 @@ export async function inviteAction(formData: FormData) {
   }
 }
 
-export async function roleAction(memberId: string, role: string) {
+export async function updateMemberAction(memberId: string, input: { name: string; email: string; role: string }) {
   try {
     const { db, org } = await allow("equipe.convidar");
-    if (!isRole(role)) return { ok: false as const, error: "Papel inválido." };
-    const team = await db.select().from(members).where(eq(members.organizationId, org.id));
-    const target = team.find((member) => member.id === memberId);
-    if (!target) return { ok: false as const, error: "Pessoa não encontrada." };
-    const admins = team.filter((member) => member.role === "administrador" && member.id !== memberId);
-    if (target.role === "administrador" && role !== "administrador" && admins.length === 0) {
-      return { ok: false as const, error: "A empresa precisa de um administrador." };
-    }
-    await db.update(members).set({ role }).where(and(eq(members.organizationId, org.id), eq(members.id, memberId)));
+    await updateMember(db, org.id, memberId, input);
+    revalidatePath("/equipe");
+    return { ok: true as const };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function removeMemberAction(memberId: string) {
+  try {
+    const { db, org, viewerEmail } = await allow("equipe.convidar");
+    await removeMember(db, org.id, memberId, viewerEmail);
     revalidatePath("/equipe");
     return { ok: true as const };
   } catch (error) {

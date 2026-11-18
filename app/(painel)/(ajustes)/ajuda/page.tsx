@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { SupportForm } from "@/components/settings-forms";
-import { Card, Title } from "@/components/ui";
+import { Card } from "@/components/ui";
 
 const FAQS: [string, string][] = [
   ["Como faço uma venda?", "Toque em Nova venda. Escolha o cliente, toque nos produtos e diga como vai receber: à vista, parcelado ou mensalidade. Ao concluir, o link de pagamento já fica pronto para enviar."],
@@ -17,7 +17,6 @@ const FAQS: [string, string][] = [
 export default function AjudaPage() {
   return (
     <div className="space-y-4">
-      <Title hint="Respostas rápidas e um jeito de falar com a gente.">Ajuda</Title>
       <div className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-sm">
         {FAQS.map(([question, answer]) => (
           <details key={question} className="group px-4 py-3">

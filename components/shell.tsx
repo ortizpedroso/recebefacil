@@ -24,7 +24,7 @@ const mainNav = [
 const moreNav = { href: "/configuracoes", label: "Configurações", icon: Settings };
 
 // Páginas que moram dentro de "Configurações" acendem esse item do menu.
-const MORE_PAGES = ["/mais", "/recebimentos", "/plataforma", "/configuracoes", "/equipe", "/ajuda", "/termos", "/privacidade"];
+const MORE_PAGES = ["/mais", "/recebimentos", "/plataforma", "/configuracoes", "/saque", "/equipe", "/ajuda", "/termos", "/privacidade"];
 
 const ROUTE_LABELS: [string, string][] = [
   ["/vendas/nova", "Nova venda"],
@@ -38,6 +38,7 @@ const ROUTE_LABELS: [string, string][] = [
   ["/produtos", "Produtos e serviços"],
   ["/relatorios", "Relatórios"],
   ["/recebimentos", "Recebimentos"],
+  ["/saque", "Saque e taxas"],
   ["/equipe", "Equipe"],
   ["/ajuda", "Ajuda"],
   ["/mais", "Configurações"],
