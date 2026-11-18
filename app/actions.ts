@@ -20,6 +20,7 @@ import { requireSession } from "../lib/session";
 import { cancelPlan, choosePlan } from "../lib/subscription";
 import { catalogSchema, chargeSchema, clientSchema, dueSchema, paymentSchema, saleSchema, toClientInput } from "../lib/schemas";
 import type { z } from "zod";
+import type { DB } from "../lib/db";
 import { campaignRecipients, campaigns, catalogItems, clients, fiscalDocuments, members, organizations, sales, supportTickets } from "../lib/schema";
 import { removeMember, updateMember } from "../lib/team";
 import { openSubaccount } from "../lib/subaccount";
@@ -419,8 +420,19 @@ export async function savePlatformAction(formData: FormData) {
       planIntegrado: formData.get("planIntegrado"),
     });
     await savePlatformSettings(db, input, viewerEmail || userName);
+    const connection = (await loadPlatformSettings(db)).asaasApiKeyEnc ? await connectPlatform(db) : null;
     revalidatePath("/", "layout");
-    return { ok: true as const };
+    return { ok: true as const, connection };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+// Salvar já busca a carteira. Uma chave recusada não desfaz o salvamento, só aparece como falha da conexão.
+async function connectPlatform(db: DB) {
+  try {
+    const result = await testPlatformConnection(db);
+    return { ok: true as const, accountName: result.accountName, environment: result.environment, walletTail: result.walletId.slice(-6) };
   } catch (error) {
     return fail(error);
   }
@@ -441,9 +453,9 @@ export async function generateWebhookTokenAction() {
 export async function testPlatformConnectionAction() {
   try {
     const { db } = await owner();
-    const result = await testPlatformConnection(db);
+    const result = await connectPlatform(db);
     revalidatePath("/plataforma");
-    return { ok: true as const, accountName: result.accountName, environment: result.environment, walletTail: result.walletId.slice(-6) };
+    return result;
   } catch (error) {
     return fail(error);
   }
