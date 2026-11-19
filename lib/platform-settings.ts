@@ -109,6 +109,10 @@ export function parsePlatformForm(raw: Record<string, unknown>): PlatformSetting
   }
   if (feeBp > MAX_PLATFORM_FEE_BP) throw new DomainError("A taxa da plataforma vai de 0% a 20%.");
   if (form.apiKey && form.apiKey.length < 6) throw new DomainError("A chave de API parece curta demais. Copie a chave inteira do Asaas.");
+  const keyEnvironment = form.apiKey.includes("_prod_") ? "producao" : form.apiKey.includes("_hmlg_") ? "sandbox" : null;
+  if (keyEnvironment && keyEnvironment !== form.environment) {
+    throw new DomainError(keyEnvironment === "producao" ? "Esta chave é de Produção. Escolha o ambiente Produção." : "Esta chave é de Sandbox. Escolha o ambiente Sandbox.");
+  }
   if (form.webhookToken && (form.webhookToken.length < 32 || form.webhookToken.length > 255)) {
     throw new DomainError("O token do webhook precisa ter de 32 a 255 caracteres. Use o botão Gerar token.");
   }

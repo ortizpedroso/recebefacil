@@ -137,6 +137,7 @@ export function PlatformForm({ view, webhookUrl, events }: { view: PlatformSetti
       <Card className="space-y-3">
         <h2 className="font-bold text-slate-900">Testar a conexão</h2>
         <p className="text-sm text-slate-600">Ao salvar, a carteira da plataforma é buscada no Asaas com a chave salva. Use este botão para conferir de novo.</p>
+        <p className="text-sm text-slate-600">Se a conta Asaas usa lista de IPs autorizados, o Asaas recusa tudo que vem de um IP fora dela. No Asaas, abra Integrações, Mecanismos de segurança, Lista de IPs autorizados e adicione o IP de saída deste servidor.</p>
         <div className="flex flex-wrap items-center gap-3">
           <button type="button" className={buttonClass} disabled={testing || !view.apiKey.configured} onClick={test}>
             {testing ? "Testando..." : "Testar conexão"}

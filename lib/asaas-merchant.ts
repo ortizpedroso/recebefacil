@@ -18,7 +18,7 @@ export async function linkMerchantAccount(db: DB, organizationId: string, apiKey
   try {
     account = await accountOf(client);
   } catch (error) {
-    if (error instanceof AsaasError && error.kind === "auth") {
+    if (error instanceof AsaasError && error.kind === "auth" && error.code !== "not_allowed_ip") {
       const where = settings.asaasEnvironment === "sandbox" ? "do ambiente de testes (sandbox)" : "de produção";
       throw new DomainError(`O Asaas não aceitou esta chave. Confira se ela é de uma conta ${where} e se foi copiada inteira.`);
     }
