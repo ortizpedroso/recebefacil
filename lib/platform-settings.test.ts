@@ -189,4 +189,8 @@ test("o formulário converte percentual e reais, e recusa o que não faz sentido
   assert.throws(() => parsePlatformForm({ ...form, environment: "demo" }), /ambiente/);
   assert.throws(() => parsePlatformForm({ ...form, webhookToken: "curto" }), /32 a 255/);
   assert.throws(() => parsePlatformForm({ ...form, apiKey: "abc" }), /curta/);
+  assert.throws(() => parsePlatformForm({ ...form, apiKey: "$aact_prod_000abcdef" }), /Escolha o ambiente Produção/);
+  assert.throws(() => parsePlatformForm({ ...form, environment: "producao", apiKey: "$aact_hmlg_000abcdef" }), /Escolha o ambiente Sandbox/);
+  assert.equal(parsePlatformForm({ ...form, apiKey: "$aact_hmlg_000abcdef" }).apiKey, "$aact_hmlg_000abcdef");
+  assert.equal(parsePlatformForm({ ...form, apiKey: "$aact_YTU5YTE0M2M2" }).apiKey, "$aact_YTU5YTE0M2M2", "chave antiga, sem marca de ambiente, passa");
 });

@@ -16,6 +16,7 @@ export class AsaasError extends Error {
     readonly kind: AsaasErrorKind,
     message: string,
     readonly status?: number,
+    readonly code?: string,
   ) {
     super(message);
     this.name = "AsaasError";
@@ -32,6 +33,13 @@ const FIXED_MESSAGES = {
   server: "O Asaas está fora do ar agora. Tente de novo em instantes.",
   response: "O Asaas respondeu algo que não esperávamos. Tente de novo.",
 } as const;
+
+// Recusas de acesso que têm causa conhecida e um passo certo no painel do Asaas, em vez de culpar a chave.
+const ACCESS_MESSAGES: Record<string, string> = {
+  not_allowed_ip:
+    "O Asaas bloqueou o acesso porque o IP deste servidor não está na lista de IPs autorizados da conta. No Asaas, abra Integrações, Mecanismos de segurança, Lista de IPs autorizados e adicione o IP de saída do servidor.",
+  invalid_environment: "A chave de API é de outro ambiente. Chave com _prod_ é de Produção, e chave com _hmlg_ é de Sandbox.",
+};
 
 // Dinheiro é centavo inteiro por dentro. Só a fronteira com o Asaas fala em reais com duas casas.
 export function toReais(value: Cents): number {
@@ -221,10 +229,12 @@ export function createAsaasClient(deps: AsaasDeps) {
 
   function failure(status: number, bodyText: string): AsaasError {
     let detail = "";
+    let code = "";
     try {
       const parsed: unknown = JSON.parse(bodyText);
       const errors = (parsed as { errors?: unknown }).errors;
       if (Array.isArray(errors)) {
+        code = String((errors[0] as { code?: unknown } | undefined)?.code ?? "");
         detail = errors
           .map((entry) => String((entry as { description?: unknown }).description ?? ""))
           .filter(Boolean)
@@ -233,7 +243,7 @@ export function createAsaasClient(deps: AsaasDeps) {
     } catch {
       detail = "";
     }
-    if (status === 401 || status === 403) return new AsaasError("auth", FIXED_MESSAGES.auth, status);
+    if (status === 401 || status === 403) return new AsaasError("auth", ACCESS_MESSAGES[code] ?? FIXED_MESSAGES.auth, status, code);
     if (status === 404) return new AsaasError("notfound", FIXED_MESSAGES.notfound, status);
     if (status === 429) return new AsaasError("ratelimit", FIXED_MESSAGES.ratelimit, status);
     if (status >= 500) return new AsaasError("server", FIXED_MESSAGES.server, status);

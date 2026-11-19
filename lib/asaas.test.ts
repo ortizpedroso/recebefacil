@@ -257,3 +257,16 @@ test("resposta de assinatura sem id vira erro de resposta, e erro do Asaas ao cr
   assert.match(rejected.message, /CPF\/CNPJ/);
   assert.equal(fake.callsTo("POST", /^\/subscriptions$/).length, 1, "criar não repete: poderia cobrar duas vezes");
 });
+
+test("IP fora da lista e chave de outro ambiente dizem a causa em vez de culpar a chave", async () => {
+  const reply = (status: number, code: string) =>
+    (async () => new Response(JSON.stringify({ errors: [{ code, description: "x" }] }), { status })) as typeof fetch;
+  const blocked = await failureOf(() => createAsaasClient({ apiKey: "test-key", environment: "producao", fetch: reply(403, "not_allowed_ip"), sleep }).getWallets());
+  assert.equal(blocked.kind, "auth");
+  assert.equal(blocked.code, "not_allowed_ip");
+  assert.match(blocked.message, /Lista de IPs autorizados/);
+  const elsewhere = await failureOf(() => createAsaasClient({ apiKey: "test-key", environment: "sandbox", fetch: reply(401, "invalid_environment"), sleep }).getWallets());
+  assert.match(elsewhere.message, /outro ambiente/);
+  const unknown = await failureOf(() => createAsaasClient({ apiKey: "test-key", environment: "sandbox", fetch: reply(401, "invalid_access_token"), sleep }).getWallets());
+  assert.match(unknown.message, /chave de API/);
+});

@@ -49,11 +49,13 @@ A cobrança é criada na conta Asaas da plataforma. Um split manda para a cartei
 
 1. Defina `RECEBEFACIL_SECRET` e `PLATFORM_OWNER_EMAILS` e publique.
 2. Entre com um e-mail da lista, abra Mais e depois Plataforma.
-3. Comece pelo ambiente Sandbox. Crie uma conta em `https://sandbox.asaas.com`, gere uma chave de API e cole no campo Chave de API.
+3. Comece pelo ambiente Sandbox. Crie uma conta em `https://sandbox.asaas.com`, gere uma chave de API e cole no campo Chave de API. A chave de Sandbox tem `_hmlg_` e a de Produção tem `_prod_`. O app recusa salvar uma chave no ambiente errado.
 4. Clique em Gerar token, copie o token que aparece (ele só aparece uma vez) e salve.
-5. Clique em Testar conexão. O app consulta a conta, guarda a carteira da plataforma e mostra o nome da conta e o ambiente. Os lojistas só veem o modo Integrado quando chave, token e carteira estão prontos.
+5. Ao salvar, o app consulta a conta no Asaas, guarda a carteira da plataforma e mostra o nome da conta e o ambiente. Se o Asaas recusar, a configuração fica salva e o motivo aparece em Testar a conexão. O botão Testar conexão confere de novo. Os lojistas só veem o modo Integrado quando chave, token e carteira estão prontos.
 6. No Asaas, abra Configurações da conta, Integrações, Webhooks e crie um webhook de cobranças e assinaturas. Use o endereço mostrado na página (`<seu domínio>/api/webhooks/asaas`), o token do passo 4, fila sequencial, e ative os eventos listados na página (veja a lista completa em Planos e assinatura abaixo).
-7. Para ir à produção, troque o ambiente, cole a chave de produção, gere um novo token, atualize o webhook no Asaas de produção e teste a conexão de novo. Trocar de ambiente solta as cobranças ainda abertas, os clientes do Asaas e as contas ligadas pelos lojistas, que precisam conectar de novo com chave de produção.
+7. Para ir à produção, troque o ambiente, cole a chave de produção, gere um novo token, salve e atualize o webhook no Asaas de produção. Trocar de ambiente solta as cobranças ainda abertas, os clientes do Asaas e as contas ligadas pelos lojistas, que precisam conectar de novo com chave de produção.
+
+**Lista de IPs autorizados.** Se a conta Asaas tiver essa lista ligada, todo pedido que sai de um IP fora dela volta com `not_allowed_ip`, e o app mostra "IP deste servidor não está na lista de IPs autorizados". No Asaas, abra Integrações, Mecanismos de segurança, Lista de IPs autorizados e adicione o IP público de saída do servidor. Em produção o servidor precisa de IP de saída fixo. Na máquina local, o IP é o da sua internet e muda quando o provedor quiser. O mesmo vale para a conta própria que um lojista conecta: se ela tiver a lista ligada, o IP do servidor precisa estar lá também.
 
 A taxa (0% a 20%) e os preços dos planos também ficam nessa página, junto com a lista de assinantes (empresa, plano, situação e próximo vencimento).
 
